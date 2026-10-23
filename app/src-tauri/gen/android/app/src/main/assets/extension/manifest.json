@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "LocalPass",
+  "version": "0.1.1",
+  "description": "Fill passwords and passkeys from your LocalPass vault. Everything stays on your own devices.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwPVVkWWhE7OLrfzJ3+2giOfvf6mtStPzCYh1YQNea4bIy83Ij6r4u7XXD+Lcqkq3p+RPlxVfrP+VC2dD08STCPO/dv6TW06mbOFirXYKreC09m9G5oXsj+wH2f1cEta2YDizjicVhqKyzHpbPVLLXF1jNWp6rwuQB/AWWGxmbN+s2KC/ajiU5ivATjw7F8gyjEbJpxiNGgIHPhSAQ4fTpcfYQzfE2Fvx8VaELFlvEJ41KkFzjHsCjMgtSiNqBjqNmGhj/IhzGQ2qMSG3tjbk9bSSQerDHIhN8RpzGpQJMvYcwCkveEiBbbMWEJZP705UisRSWCxjzWGoxT7401G0UQIDAQAB",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "32": "icon-32.png",
+    "128": "icon-128.png"
+  },
+  "permissions": ["nativeMessaging", "storage", "activeTab", "scripting", "privacy"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "LocalPass",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "32": "icon-32.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "http://*.localhost/*"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "match_about_blank": false,
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "http://*.localhost/*"],
+      "js": ["inject.js"],
+      "all_frames": true,
+      "match_about_blank": false,
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

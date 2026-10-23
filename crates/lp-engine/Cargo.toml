@@ -1,0 +1,34 @@
+[package]
+name = "lp-engine"
+description = "LocalPass engine: vault session, items, pairing, revocation and sync lifecycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+test-utils = ["lp-core/test-utils"]
+
+[dependencies]
+lp-core.workspace = true
+lp-store.workspace = true
+lp-sync.workspace = true
+lp-import.workspace = true
+data-encoding.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+qrcode.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+lp-core = { workspace = true, features = ["test-utils"] }
+proptest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber.workspace = true

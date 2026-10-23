@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2a92d1fa496f736e8ac1092a9bea72578d936f82093aea80a583ad3993ca09bd # shrinks to perm = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], mask = [false, false, true, false, false, false, false, false, false, false, false, false], chunk = 1
+cc 655efe22e0a3450408108ee9ec391858f40da01f06ea9a94a458f9735d7116cc # shrinks to perm = [7, 0, 4, 3, 6, 5, 9, 11, 8, 2, 1, 10], mask = [false, false, false, false, false, true, false, true, false, false, false, false], stranger_ops = 1, foreign_ops = 1, chunk = 1
+cc ea8159113d367c70e6a7088cfaf0dbeda8cf86d63f0a5c082abb1e11643bf52a # shrinks to perm = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], dups = [10], chunk = 1
+cc a43053f2065a29ef543692d51297f7cc55389dc5afb6493a8c4396a155aeb4ff # shrinks to perm = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], mask = [false, false, true, false, false, false, false, false, false, false, false, false], chunk = 1, reversed = false
+cc 2edcca99a3777453b38d4f2d6ac7dbfd1016b1d72809cdb22e777de4999a5081 # shrinks to which = 0, sig = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]

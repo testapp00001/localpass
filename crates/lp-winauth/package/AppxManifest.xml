@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Manifest of the LocalPass passkey provider package (loose-file Developer Mode registration, no certificate).
+  It is shipped as it is: the class id below is the constant `provider::CLSID` in this crate (a unit test keeps
+  them equal; the installer-bundling script and tools/windows-provider/build.ps1 also compare it with what
+  `lp-winauth-provider clsid` prints). Both copy this file next to lp-winauth-provider.exe as AppxManifest.xml.
+  The package name, the exe name and the class id are also constants in app/src-tauri/src/windows_passkeys.rs.
+  See docs/windows-passkey-provider-notes.md, "Phase 4.3/4.4 build" and "Phase 4.5".
+-->
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  IgnorableNamespaces="uap uap3 rescap com desktop desktop6">
+  <Identity Name="LocalPass.Passkeys" Publisher="CN=LocalPass Dev" Version="0.1.0.0" ProcessorArchitecture="x64"/>
+  <Properties>
+    <DisplayName>LocalPass</DisplayName>
+    <PublisherDisplayName>LocalPass</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <!-- The provider writes its log and pairing secret under %LOCALAPPDATA%\LocalPass\provider and reads
+         HKCU\Software\LocalPass\Provider: keep those real, not redirected into the package's private store. -->
+    <desktop6:RegistryWriteVirtualization>disabled</desktop6:RegistryWriteVirtualization>
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.26100.0" MaxVersionTested="10.0.26200.0"/>
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us"/>
+  </Resources>
+  <Applications>
+    <Application Id="Provider" Executable="lp-winauth-provider.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="LocalPass" Description="LocalPass passkey provider" BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png"/>
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="lp-winauth-provider.exe" Arguments="-ActivateAuthenticator" DisplayName="LocalPass Passkey Provider">
+              <com:Class Id="91E9966B-58AE-455A-AB60-4B2FDB66A730" DisplayName="LocalPass Passkey Provider"/>
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="lp-winauth-provider.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="lp-winauth-provider.exe"/>
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust"/>
+    <rescap:Capability Name="unvirtualizedResources"/>
+  </Capabilities>
+</Package>

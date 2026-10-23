@@ -1,0 +1,27 @@
+[package]
+name = "lp-sync"
+description = "LocalPass sync: Noise transport, op-log replication, SPAKE2 pairing, mDNS discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lp-core.workspace = true
+lp-store.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+snow.workspace = true
+spake2.workspace = true
+mdns-sd.workspace = true
+if-addrs.workspace = true
+zeroize.workspace = true
+data-encoding.workspace = true
+
+[dev-dependencies]
+lp-core = { workspace = true, features = ["test-utils"] }
+proptest.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber.workspace = true

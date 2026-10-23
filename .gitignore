@@ -1,0 +1,34 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+dist/
+*.local
+
+# Tauri
+app/src-tauri/target/
+# The Windows passkey provider staged for the installer (app/scripts/stage-provider.ts); only the README stays
+/app/windows-passkeys/*
+!/app/windows-passkeys/README.txt
+app/src-tauri/gen/schemas
+
+# Local dev vaults and logs (never commit vault data)
+.localpass-dev/
+*.lpbackup
+*.log
+
+# Signing keys never belong in the repository
+*.jks
+*.keystore
+*.pk8
+keystore.properties
+key.properties
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

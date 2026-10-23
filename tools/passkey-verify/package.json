@@ -1,0 +1,9 @@
+{
+  "name": "passkey-verify",
+  "private": true,
+  "type": "module",
+  "description": "Checks LocalPass passkeys with SimpleWebAuthn, an independent relying-party implementation",
+  "dependencies": {
+    "@simplewebauthn/server": "^13.1.0"
+  }
+}

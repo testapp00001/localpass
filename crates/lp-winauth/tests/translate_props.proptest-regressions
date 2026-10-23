@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8baf112dd3eaf6fdc09a30f4955b031385b54e697c42a469325dfdbb4de99665 # shrinks to id = "a/"
+cc f9a134eaaaaa62ee76dc8c93cf8bd6a2e52207dcda2c392cf4d708ec9097e6d3 # shrinks to id = "aa", other = "aa", credential_id = [0], allow = [[1]], include_signed = false, signature = [0], asserted_for_other = false, junk = [], garbage = false
+cc 427b479643d5cc7ebda18a904f1bd640e09e1f5c61905ee3d3cb76e2e7852a34 # shrinks to id = "aa", other = "ab", credential_id = [0], flags = 0, count = 0, cut = Index(0), junk = [18, 135, 0, 45, 98, 34, 99, 141, 12, 234, 25, 74, 97, 26, 15, 234, 151, 126, 153, 196, 100, 152, 191, 45, 116, 249, 97, 114, 66, 217, 130, 30, 159, 195, 125, 183, 251, 25, 58, 60, 87, 236, 125, 155, 160, 128, 149, 39, 120, 39, 87, 100, 20, 145, 137, 199, 175, 114, 160, 92, 26, 72, 6, 71, 239, 180, 36, 111, 49, 73, 78, 224, 155, 214, 218, 47, 192, 182, 47, 168, 141, 69, 224, 41, 145, 26, 74, 161, 17, 64, 135, 116, 95, 96, 95, 240, 229, 30, 57, 50, 3, 194, 183, 78, 18, 82, 47, 215, 113, 54, 151, 107, 239, 99, 247, 96, 52, 43, 146, 99, 39, 40, 210, 210, 17, 242, 36, 19, 150, 220, 142, 80, 226, 60, 175, 137, 101, 147, 46, 121, 86, 242, 16, 155, 129, 115, 54, 16, 236, 10, 216, 48, 108, 29, 250, 138, 248, 31, 125, 83, 92, 31, 0, 180, 53], flip = Index(6809943941392103684)

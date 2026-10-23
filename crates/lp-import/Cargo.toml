@@ -1,0 +1,18 @@
+[package]
+name = "lp-import"
+description = "LocalPass import/export: Bitwarden JSON/CSV, KeePass KDBX, browser CSV"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+csv.workspace = true
+keepass.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+keepass = { workspace = true, features = ["save_kdbx4"] }

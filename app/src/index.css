@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Keep secrets out of text selection drag images and spellcheck. */
+.secret {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+::selection {
+  @apply bg-indigo-200 dark:bg-indigo-800;
+}
+
+/* While the camera is open the page is see-through; only the scan overlay (outside #root) shows. */
+html.scanning,
+html.scanning body {
+  background: transparent !important;
+}
+
+html.scanning #root {
+  visibility: hidden;
+}

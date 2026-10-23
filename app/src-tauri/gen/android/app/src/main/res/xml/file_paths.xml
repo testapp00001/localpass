@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Only the app's own picture folder: where the web view's file chooser puts a camera photo
+       (RustWebChromeClient.createImageFile). Not all of external storage, not the cache. -->
+  <external-files-path name="camera_pictures" path="Pictures/" />
+</paths>

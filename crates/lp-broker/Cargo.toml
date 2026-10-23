@@ -1,0 +1,63 @@
+[package]
+name = "lp-broker"
+description = "LocalPass broker: lets browser extensions and OS passkey providers ask the unlocked app for logins and passkeys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["server", "client"]
+# The app's side: request handling against the engine, the named-pipe listener and the
+# native-messaging helper.
+server = ["dep:lp-engine", "tokio/io-std"]
+# A Rust client (the Windows passkey provider uses it): framing, protocol types, the pipe
+# connection and the handshake. It must not pull in the engine, sync or storage crates:
+# build it with `--no-default-features --features client` to check.
+client = []
+
+[dependencies]
+lp-core.workspace = true
+lp-engine = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+lp-core = { workspace = true, features = ["test-utils"] }
+proptest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[[example]]
+name = "dev_host"
+required-features = ["server"]
+
+[[example]]
+name = "nmhost"
+required-features = ["server"]
+
+[[test]]
+name = "server"
+required-features = ["server", "client"]
+
+[[test]]
+name = "client"
+required-features = ["server", "client"]
+
+[[test]]
+name = "nmhost"
+required-features = ["server"]
+
+[[test]]
+name = "hardening"
+required-features = ["server", "client"]
+
+[[example]]
+name = "prompt_probe"
+required-features = ["client"]

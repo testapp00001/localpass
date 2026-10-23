@@ -1,0 +1,26 @@
+:root { color-scheme: light dark; --fg: #0f172a; --bg: #fff; --muted: #64748b; --line: #e2e8f0; --accent: #4f46e5; --hover: #eef2ff; }
+@media (prefers-color-scheme: dark) { :root { --fg: #e2e8f0; --bg: #0f172a; --muted: #94a3b8; --line: #1e293b; --hover: #1e293b; } }
+* { box-sizing: border-box; }
+body { margin: 0; width: 340px; font: 13px/1.4 system-ui, "Segoe UI", Roboto, sans-serif; color: var(--fg); background: var(--bg); }
+header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+header #site { margin-left: auto; color: var(--muted); font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+main { padding: 12px 14px; min-height: 80px; max-height: 360px; overflow: auto; }
+footer { padding: 10px 14px; border-top: 1px solid var(--line); }
+.muted { color: var(--muted); }
+.small { font-size: 11.5px; margin-top: 4px; }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; }
+h2 { margin: 0 0 6px; font-size: 14px; }
+p { margin: 0 0 10px; }
+button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: inherit; padding: 6px 12px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .6; cursor: default; }
+input[type="search"] { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; font: inherit; margin-bottom: 8px; }
+.code { font: 700 26px/1.2 ui-monospace, Consolas, monospace; letter-spacing: .15em; text-align: center; margin: 12px 0; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; }
+.list li:hover { background: var(--hover); }
+.list .who { flex: 1; min-width: 0; }
+.list .who b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.list .who span { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.error { color: #b91c1c; }
+@media (prefers-color-scheme: dark) { .error { color: #fca5a5; } }

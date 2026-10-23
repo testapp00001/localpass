@@ -1,0 +1,22 @@
+[package]
+name = "lp-cli"
+description = "LocalPass command-line tool: headless sync peer and test harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lp"
+path = "src/main.rs"
+
+[dependencies]
+lp-core.workspace = true
+lp-engine.workspace = true
+lp-sync.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+rpassword.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zeroize.workspace = true

@@ -1,0 +1,95 @@
+[workspace]
+members = ["crates/*", "app/src-tauri"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.1"
+edition = "2024"
+license = "MIT"
+rust-version = "1.88"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = "1"
+ciborium = "0.2"
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# Crypto
+argon2 = "0.6"
+chacha20poly1305 = "0.11"
+ed25519-dalek = "3"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+sha1 = "0.11"
+sha2 = "0.11"
+hmac = "0.13"
+hkdf = "0.13"
+subtle = "2.6"
+zeroize = { version = "1.8", features = ["derive"] }
+getrandom = "0.4"
+snow = "0.10"
+spake2 = "0.4"
+
+# Storage
+rusqlite = { version = "0.40", features = ["bundled"] }
+
+# Async & networking
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }
+mdns-sd = "0.21"
+if-addrs = "0.15"
+
+# Utilities
+uuid = { version = "1", features = ["serde"] }
+# Passkeys (WebAuthn ES256) and origin matching
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8"] }
+psl = "2"
+url = "2"
+unicode-normalization = "0.1"
+data-encoding = "2"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+csv = "1.4"
+keepass = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+rpassword = "7"
+
+# Platform
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Pipes", "Win32_System_Memory", "Win32_UI_Shell"] }
+# Async types the `windows` crate hands out; the app uses them to cancel a pending Windows Hello check
+windows-future = "0.3"
+# lp-winauth: COM server + WebAuthn plugin API (the plugin exports have no bindings, see docs/windows-passkey-provider-notes.md)
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_Packaging_Appx", "Win32_System_Com", "Win32_System_Console", "Win32_System_Diagnostics_Debug", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+windows-core = "0.62"
+
+# Testing
+proptest = "1"
+tempfile = "3"
+
+# Internal crates
+lp-core = { path = "crates/lp-core" }
+lp-store = { path = "crates/lp-store" }
+lp-sync = { path = "crates/lp-sync" }
+lp-engine = { path = "crates/lp-engine" }
+lp-import = { path = "crates/lp-import" }
+# Default features off: the Windows passkey provider takes only `client`; the app asks for `server` + `client`.
+lp-broker = { path = "crates/lp-broker", default-features = false }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
+
+# Function names and line numbers in panics are enough; full debug info makes the
+# Android library about 300 MB.
+[profile.dev]
+debug = "line-tables-only"
+
+# Argon2 and Noise are painfully slow unoptimized; keep crypto fast in debug/test builds.
+[profile.dev.package."*"]
+opt-level = 2
