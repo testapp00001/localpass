@@ -1,0 +1,8 @@
+# LF everywhere (rustfmt and shell scripts need it), whatever core.autocrlf the machine has.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.ico binary
+*.icns binary
+*.jar binary
