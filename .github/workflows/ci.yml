@@ -35,7 +35,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # lp-broker's helper tests start an example binary that only a whole-crate `cargo test` builds.
-      - run: cargo test --workspace
+      - run: '[Environment]::OSVersion.VersionString; (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").DisplayVersion'
+      - run: cargo test --workspace --no-fail-fast
 
   web:
     name: Web app and extension (types, tests)
