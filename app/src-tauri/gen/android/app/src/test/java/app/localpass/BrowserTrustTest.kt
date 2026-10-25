@@ -1,6 +1,7 @@
 package app.localpass
 
 import java.io.File
+import java.security.MessageDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -15,6 +16,21 @@ class BrowserTrustTest {
     /** The list that ships in the app, so a broken or emptied asset fails here. */
     private val shipped by lazy {
         BrowserTrust.parse(File("src/main/assets/privileged_browsers.json").readText())
+    }
+
+    /**
+     * The shipped list is Google's, fetched from https://www.gstatic.com/gpm-passkeys-privileged-apps/apps.json
+     * on 2026-10-23 (byte for byte the same file then). It decides which browsers may tell LocalPass what
+     * website a page belongs to, so changing it is a decision, not an accident: fetch it again, read the diff
+     * (packages and certificates added or dropped), then update this digest and the date above. Carriage
+     * returns are ignored so a checkout with Windows line endings gives the same digest.
+     */
+    @Test
+    fun theShippedListIsThePinnedCopyOfGooglesList() {
+        val bytes = File("src/main/assets/privileged_browsers.json").readBytes()
+            .filter { it != '\r'.code.toByte() }.toByteArray()
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        assertEquals("0891ee2507894999ead3eb4f42e17936a2e8ed8f8fd95592535c9811ef319481", digest)
     }
 
     @Test

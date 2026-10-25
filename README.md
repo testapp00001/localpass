@@ -18,8 +18,11 @@ devices, so they all converge.
 | `crates/lp-sync` | Noise transport, sync protocol, SPAKE2 pairing, mDNS discovery, background service |
 | `crates/lp-engine` | The API every front end uses: vault, items, pairing, revocation, import/export, sync lifecycle |
 | `crates/lp-import` | Bitwarden JSON/CSV, KeePass `.kdbx`, browser CSV import; Bitwarden-format export |
+| `crates/lp-broker` | The local pipe between the app and the browser extension or the Windows passkey provider: pairing, requests, the native-messaging helper |
+| `crates/lp-winauth` | Windows passkey provider: the COM server Windows starts, which relays requests to the app through the broker |
 | `crates/lp-cli` | `lp`: headless sync peer and test harness |
-| `app/` | Desktop app: Tauri 2 + React + TypeScript + Tailwind |
+| `app/` | Desktop app: Tauri 2 + React + TypeScript + Tailwind (also builds the Android app) |
+| `extension/` | Chrome and Edge extension (TypeScript, built with Bun): autofill, saving logins, passkeys |
 
 ## Running
 
@@ -52,8 +55,7 @@ allows with it.
 ```sh
 set JAVA_HOME=C:\Program Files\Android\Android Studio\jbr
 set ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk
-set NDK_HOME=%ANDROID_HOME%
-dk.3.13750724
+set NDK_HOME=%ANDROID_HOME%\ndk\27.3.13750724
 cd app
 bun run tauri android dev                                   # run on a phone connected by USB
 bun run tauri android build --debug --target aarch64 --apk  # installable debug APK
@@ -82,6 +84,69 @@ signed before a phone will install it. Gradle signs it when
 -keyalg RSA -keysize 4096 -validity 10000`, and keep it: an update only installs over an app
 signed with the same key. Release builds don't shrink code with R8, which crashed at startup on
 Android 17 and isn't worth the risk for this reflection-heavy stack.
+
+### Installing and updating
+
+LocalPass has no updater and never connects to the internet to look for one (by design). Releases are
+published on the [GitHub release page](https://github.com/testapp00001/localpass/releases); Settings has a
+**Releases** link that opens it in your browser. Looking for a new version is up to you. A release is
+four files: the Windows installer (`LocalPass_<version>_x64-setup.exe`), the Android APK
+(`localpass-<version>-universal-release.apk`, for 64-bit ARM phones and x86_64 emulators), the browser
+extension (`localpass-extension-<version>.zip`) and `SHA256SUMS.txt`. The app and the extension share one
+version number; update both together. Download the files (or copy them to each device by USB stick or shared
+folder) and check them first:
+
+```powershell
+(Get-FileHash .\LocalPass_<version>_x64-setup.exe -Algorithm SHA256).Hash.ToLower()    # must equal the line in SHA256SUMS.txt
+```
+
+**Windows.** The installer is not signed with a code-signing certificate. If it came through a browser
+download, Windows SmartScreen says "Windows protected your PC": choose **More info → Run anyway**. Files
+copied by USB stick or from a shared folder usually show no warning. To update, quit LocalPass (tray icon → Quit) and run the new installer. It notices the installed version and
+asks how to install; **choose "Do not uninstall"** (the second option, not the preselected "Uninstall before
+installing"). The files are then replaced in place and everything stays: your vault and settings (they live in your
+user profile, not in the install folder), the browser registration, the Windows passkeys registration and
+start at login. With the preselected choice the installer first runs the old uninstaller, which removes the
+browser registration (Settings → Browser extension → Set up again), the Windows passkeys registration (Settings →
+Windows passkeys → Set up, turn the Windows switch on, Pair) and the start-at-login entry; the vault is not
+touched. After the update, reload the extension: open `chrome://extensions` (or `edge://extensions`) and click
+**Reload** on LocalPass; the extension you loaded from Settings → Browser extension → Open is the folder inside the
+install folder, which the installer has just replaced. Keep the install folder the same, because the Windows passkey
+provider and the browser registration point into it; if Windows passkeys stop working after an update, choose
+**Set up again** in Settings → Windows passkeys.
+
+**Android.** Copy the APK to the phone and open it; Android asks once to allow installing from that app.
+To update, install the new APK over the old one. This works because every release is signed with the same
+key and has a higher version code (the version code comes from the version number: 0.2.0 is 2000), and your
+vault stays. If Android refuses with a signature conflict, the APK was signed with a different key: do not
+uninstall the app to get past it, because that deletes the vault on that phone (it comes back by pairing and
+syncing with another device only if another device still has it).
+
+**Optional, Android:** [Obtainium](https://github.com/ImranR98/Obtainium) can watch the GitHub release page
+above, tell you about new APKs and install them. It is a separate app that does the looking; LocalPass itself
+stays offline.
+
+**Checking where a file came from.** Every release file has a build attestation made by the release workflow:
+`gh attestation verify <file> --repo testapp00001/localpass`.
+
+### Making a release (maintainers)
+
+Releases are built by GitHub Actions, not on a laptop. Commit messages follow
+[Conventional Commits](https://www.conventionalcommits.org) (`feat:`, `fix:`, `security:`, `docs:` ...), which is
+what the changelog is generated from.
+
+```powershell
+bun scripts/release.ts 0.3.0     # bumps every version file, regenerates CHANGELOG.md, commits "chore(release): v0.3.0", tags v0.3.0
+git push origin main v0.3.0      # the tag starts .github/workflows/release.yml
+```
+
+The workflow checks the tag against the version files, builds the installer and the extension zip on Windows and
+the signed APK on Linux, adds `SHA256SUMS.txt` and build attestations, and creates a **draft** release with the
+changelog section as its notes. Open the draft on GitHub, check the files, then press **Publish**. The Android
+signing key is stored as the secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` and
+`ANDROID_KEY_ALIAS` of the repository environment `release`; the build fails if the APK is signed with any key
+other than the one pinned in the workflow (`ANDROID_CERT_SHA256`). `.github/workflows/ci.yml` runs formatting,
+clippy and all tests on every push and pull request.
 
 ### CLI
 
@@ -123,7 +188,8 @@ Passwords are only sent to the page when you pick a login in the menu or popup, 
 loads, and only to the site the login was saved for. Logins for other sites, pages on plain http
 (except localhost) and login forms inside other sites' frames are not filled. The popup can also turn off
 the browser's own password saving. Disconnect a browser in Settings at any time: it loses access at once,
-even if a page was already open.
+even if a page was already open. The in-page buttons stay inactive on pages with a `filter` or `opacity`
+on `<html>`; use the popup there (details under Security notes and limits).
 
 Two things always ask you first. Searching the whole vault from the popup, or filling a login saved for
 a different website than the page, needs Windows Hello every time (the extension cannot do it
@@ -175,6 +241,7 @@ place takes LocalPass out of Windows' list again; uninstalling LocalPass does it
 may fail (there is no account picker yet); use the browser extension there. The provider belongs to
 the folder LocalPass is installed in: if you move LocalPass or run another copy (a development build),
 choose **Set up again** there, which turns the Windows switch off until you turn it on again.
+What other programs running as you can read or change here is listed under Security notes and limits.
 
 ## Passkeys and autofill on Android
 
@@ -256,10 +323,23 @@ notification.
 
 - There is no account and no recovery: if you forget the master password and
   lose every device, the data is gone. Make encrypted backups (Settings →
-  Encrypted backup).
+  Encrypted backup). The encrypted backup is also the only export that carries
+  your passkeys, private keys included, so keep it as safe as the vault. The
+  plain JSON export (for moving to another password manager) leaves passkeys
+  out: no other manager could use them, and a private key does not belong in an
+  unencrypted file. Settings and `lp export --plain` tell you how many were left
+  out.
 - A thief who knows a device's master password can act as that device until
   you remove it (Devices → Remove). Other devices learn about the removal the
   next time they sync. Removing a device doesn't rotate the vault keys yet.
+- LocalPass does not protect you from malware that already runs as your own
+  Windows user. Such a program can read the memory of the unlocked app, log what
+  you type, and read the browser extension's pairing secret (kept in the browser's
+  profile folder) to talk to the app as if it were your paired browser. The
+  approvals described in this file (confirming a pairing code, Windows Hello for
+  logins saved for another site, **Replace?**) stop web pages and programs that
+  were never paired. They do not stop a program that already has your user's
+  access. Keep your PC free of untrusted software and your Windows account locked.
 - Office and guest networks often block device-to-device traffic or multicast.
   Use "Connect by address" or a phone hotspot. `lp doctor` shows what is blocked.
 - Windows Firewall asks to allow LocalPass the first time it listens. Allow it
@@ -276,3 +356,56 @@ notification.
   the pairing code or the 2FA key instead.
 - A device with a badly wrong clock can win edits it shouldn't. The app warns
   when a peer's clock is off by more than a minute.
+- Pairing can be slowed down by someone else on the same network: a host there
+  can keep one pairing attempt waiting for up to about 15 seconds at a time. That
+  is a nuisance, not a way around the code (see Pairing above). If pairing hangs,
+  cancel and try again, or pair over a phone hotspot.
+- Import only files you trust. A KeePass `.kdbx` file states how much
+  key-derivation work opening it needs, and LocalPass does not cap that yet, so a
+  hostile file can make an import run for a very long time or use a lot of
+  memory. If an import hangs, close LocalPass and do not open that file again.
+- Matching logins to websites uses the registrable domain: a login saved for
+  `example.com` is also offered on `login.example.com` and `shop.example.com`,
+  never on `example.org` or `example.com.evil.test`. The match is https only
+  (plain http only on localhost). A saved address without a port matches the
+  site on any port; one saved with a port (`https://example.com:8443`) matches
+  only that port. Saving a password that would replace one stored for another
+  address of the same site asks first (the **Replace?** question).
+- The browser extension's buttons on a page are inactive on pages that put a
+  `filter` or `opacity` on the `<html>` element (Dark Reader's filter mode, some
+  grayscale sites): Chrome then does not call them plainly visible, and LocalPass
+  ignores clicks it cannot be sure you saw. That fails safe, and the toolbar popup
+  still fills.
+- **Windows: programs running as you.** LocalPass does not defend the Windows
+  passkey provider against other programs running as you. What they can read or
+  change there:
+  - Windows keeps its own list of your LocalPass passkeys (website, user name
+    and credential id, never a private key) so its sign-in sheet can show them.
+    Any program running as you can read that list, also while the vault is
+    locked.
+  - The provider's files (in LocalPass's install folder), its command alias and
+    the recorded location of the LocalPass app can be changed by any program
+    running as you, and nothing checks them. Windows would run a replaced
+    provider as the passkey provider and hand it the create and sign-in
+    requests; the app would still ask Windows Hello for each use.
+  - The provider's COM server (the part Windows starts) accepts calls from any
+    program running as you. Create and sign-in requests carry Windows' signature
+    and are checked; the cancel and lock-status calls are not signed. The
+    provider's log file names the website of every request and its request id, so
+    such a program can cancel a request in progress or ask whether the vault is
+    unlocked.
+- If LocalPass cannot create the local pipe that the extension and the Windows
+  provider use, it records that once in its log and does not retry or show a
+  message. From then on they cannot reach the app. Restart LocalPass.
+- If Windows or the browser cancels a passkey request at the last moment (for
+  example you close the sheet just as the passkey is being made), the passkey
+  LocalPass already created stays in the vault although the website never got
+  it. It is unused: delete that item.
+- On Android, passkeys and autofill take the website from the browser in front
+  (see "Passkeys and autofill on Android" for the trusted-browser rule). Autofill
+  takes the first website the browser reports for the screen, not necessarily the
+  one belonging to the frame that holds the password field. On a page that
+  embeds another site's login form in a frame, a login saved for the outer site
+  can therefore be offered for the framed form (the desktop extension refuses
+  that). LocalPass hands over a password only after you pick that login, so look
+  at which form you are filling before you pick.
