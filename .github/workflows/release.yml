@@ -1,0 +1,187 @@
+name: Release
+
+# Pushing a tag like v0.3.0 builds everything and leaves a DRAFT release for you to check and publish.
+# Cut the tag with `bun scripts/release.ts 0.3.0` (it bumps versions, writes CHANGELOG.md, commits, tags).
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  # The certificate every LocalPass APK must be signed with: an update only installs over an app signed
+  # with the same key. The build fails if the secret keystore is a different one.
+  ANDROID_CERT_SHA256: 533eb2e6389d6632a58e69a6ed0d4e7e8e9deb0802f19f46997d34fb31ff6089
+
+jobs:
+  check:
+    name: Tag matches the versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: bun scripts/release.ts --check "${GITHUB_REF_NAME#v}"
+
+  windows:
+    name: Windows installer and extension
+    needs: check
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: bun install --frozen-lockfile
+        working-directory: extension
+      - run: bun install --frozen-lockfile
+        working-directory: app
+      # beforeBuildCommand runs `build:all`: web app, extension, and the Windows passkey provider.
+      - run: bun run tauri build
+        working-directory: app
+      - name: Collect files
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir out
+          cp "target/release/bundle/nsis/LocalPass_${version}_x64-setup.exe" out/
+          (cd extension/dist && 7z a -tzip "../../out/localpass-extension-${version}.zip" .)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: out/*
+          if-no-files-found: error
+
+  android:
+    name: Android APK
+    needs: check
+    runs-on: ubuntu-latest
+    # Holds the signing secrets and only runs for release tags (see the environment's deployment rules).
+    environment: release
+    permissions:
+      contents: read
+    env:
+      NDK_VERSION: 27.3.13750724
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Android SDK and NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" "platforms;android-37" "build-tools;37.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+      - run: bun install --frozen-lockfile
+        working-directory: extension
+      - run: bun install --frozen-lockfile
+        working-directory: app
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/localpass.jks"
+          {
+            echo "password=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storeFile=$RUNNER_TEMP/localpass.jks"
+          } > app/src-tauri/gen/android/keystore.properties
+      - run: chmod +x app/src-tauri/gen/android/gradlew
+      - run: bun run tauri android build --target aarch64 x86_64 --apk --ci
+        working-directory: app
+      - name: Check the signature and collect the file
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          apk=app/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)"
+          "$apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/apksigner.txt"
+          grep -q "certificate SHA-256 digest: $ANDROID_CERT_SHA256" "$RUNNER_TEMP/apksigner.txt" \
+            || { echo "::error::the APK is not signed with the LocalPass release key"; exit 1; }
+          mkdir out
+          cp "$apk" "out/localpass-${version}-universal-release.apk"
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/localpass.jks" app/src-tauri/gen/android/keystore.properties
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    name: Draft release
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the build attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # git-cliff reads the whole history
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: files
+          merge-multiple: true
+      - name: Checksums
+        working-directory: files
+        run: sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: files/*
+      - name: Release notes
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: release-notes.md
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            cat release-notes.md
+            cat <<'EOF'
+
+          ---
+
+          **Files**
+
+          | File | For |
+          |---|---|
+          | `LocalPass_<version>_x64-setup.exe` | Windows 10/11 (per-user install, not code-signed: SmartScreen says "More info → Run anyway") |
+          | `localpass-<version>-universal-release.apk` | Android 7+ (64-bit ARM phones and x86_64 emulators) |
+          | `localpass-extension-<version>.zip` | Chrome / Edge extension (Developer mode, "Load unpacked") |
+          | `SHA256SUMS.txt` | SHA-256 of every file above |
+
+          Check a download: `(Get-FileHash <file> -Algorithm SHA256).Hash.ToLower()` must equal its line in `SHA256SUMS.txt`.
+          Check where it was built: `gh attestation verify <file> --repo ${{ github.repository }}`.
+          Updating by hand: see "Installing and updating" in the README (Windows: choose **Do not uninstall**).
+          EOF
+          } > body.md
+          gh release create "$GITHUB_REF_NAME" files/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "LocalPass ${GITHUB_REF_NAME#v}" --notes-file body.md

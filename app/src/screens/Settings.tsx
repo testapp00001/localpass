@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Download, FileUp, Fingerprint, KeyRound, LogOut, Upload } from "lucide-react";
 import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, type AppInfo, type ImportReport, type Settings as AppSettings } from "../lib/api";
 import { Button, Card, ErrorText, Modal, PasswordInput, Select, TextInput, Toggle } from "../components/ui";
 import { StrengthMeter } from "../components/StrengthMeter";
@@ -8,6 +9,8 @@ import { useToast } from "../components/Toaster";
 import { AndroidSetup } from "./AndroidSetup";
 import { BrowserExtension } from "./BrowserExtension";
 import { WindowsPasskeys } from "./WindowsPasskeys";
+
+const RELEASES_URL = "https://github.com/testapp00001/localpass/releases";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -232,6 +235,11 @@ export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: 
 
       <p className="pb-4 text-center text-xs text-slate-400">
         LocalPass {info.version} · Everything stays on your devices
+        {" · "}
+        {/* A plain link: the browser opens it when you click. The app itself never asks the internet for updates. */}
+        <button type="button" className="underline hover:text-slate-600 dark:hover:text-slate-300" onClick={() => openUrl(RELEASES_URL)}>
+          Releases
+        </button>
         {info.quickUnlock.kind === "windowsHello" && !info.quickUnlock.available && (
           <>
             {" · "}
