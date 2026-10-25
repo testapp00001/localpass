@@ -88,7 +88,7 @@ jobs:
       - name: Android SDK and NDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" "platforms;android-37" "build-tools;37.0.0"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${NDK_VERSION}" "platforms;android-37.0" "build-tools;37.0.0"
           echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
       - run: bun install --frozen-lockfile
         working-directory: extension
