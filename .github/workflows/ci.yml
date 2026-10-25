@@ -36,7 +36,17 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # lp-broker's helper tests start an example binary that only a whole-crate `cargo test` builds.
       - run: '[Environment]::OSVersion.VersionString; (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").DisplayVersion'
-      - run: cargo test --workspace --no-fail-fast
+      - run: cargo test --workspace --exclude lp-winauth --no-fail-fast
+      # The hosted runner is Windows Server 2025 (24H2), whose webauthn.dll answers E_NOTIMPL to the passkey
+      # plugin API (decode/encode, authenticator state). These tests need a Windows 11 with that API and are
+      # run on the developer PC instead (docs/handoff-phase4-5.md); everything else in lp-winauth runs here.
+      - run: >-
+          cargo test -p lp-winauth --no-fail-fast --
+          --skip handler::tests --skip sys::api_tests --skip translate::tests
+          --skip pair_create_list_assert_end_to_end
+          --skip a_locked_vault_is_unlocked_by_the_app_for_a_sign_in_but_never_for_listing
+          --skip a_provider_the_app_does_not_know_is_refused
+          --skip when_the_app_goes_away_requests_fail_fast_as_device_not_found
 
   web:
     name: Web app and extension (types, tests)
