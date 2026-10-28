@@ -58,7 +58,7 @@ Run a second desktop instance on one PC (to try pairing): `set LOCALPASS_PROFILE
 
 ### Android
 
-- Env needed in each shell: `JAVA_HOME` (Android Studio's `jbr`), `ANDROID_HOME`, `NDK_HOME` (NDK r27d `27.3.13750724`). The four Rust Android targets are in `rust-toolchain.toml`.
+- Env needed in each shell: `JAVA_HOME` (Android Studio's `jbr`), `ANDROID_HOME`, `NDK_HOME` (NDK r27d `27.3.13750724`). The two Rust Android targets (aarch64, x86_64; the only ABIs shipped) are in `rust-toolchain.toml`, so always pass `--target` to `tauri android build`.
 - `bun run tauri android build --debug --target aarch64 --apk` (or `... android dev` for a USB-connected phone). On Windows this compiles the Rust library but then fails creating a symlink unless Developer Mode is on.
 - Without Developer Mode: copy `target/<triple>/debug/liblocalpass_lib.so` into `app/src-tauri/gen/android/app/src/main/jniLibs/<abi>/`, then in `app/src-tauri/gen/android` run `gradlew.bat assembleArm64Debug -x rustBuildArm64Debug` (flavours: `Arm64`, `X86_64`, ...).
 - Quick Rust-only check: `cargo clippy -p localpass --target aarch64-linux-android -- -D warnings` (a cold build is slow; run it in the background). It needs the CC/AR/linker env vars pointing at the NDK's `aarch64-linux-android24-clang.cmd` / `llvm-ar.exe`.
