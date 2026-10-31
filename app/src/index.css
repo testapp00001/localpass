@@ -13,6 +13,36 @@ body,
   height: 100%;
 }
 
+/* Native controls (selects, scrollbars, autofill) follow the app's theme, not the system's: WebKitGTK draws
+   them with the GTK theme otherwise, so a dark app got white selects with unreadable light text. */
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+/* A select drawn by the system ignores the CSS background; draw it ourselves, with our own arrow. */
+select {
+  appearance: none;
+  padding-right: 2.25rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5 8 5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 1rem;
+}
+
+select option {
+  background-color: white;
+  color: #0f172a;
+}
+
+html.dark select option {
+  background-color: #0f172a;
+  color: #f1f5f9;
+}
+
 body {
   @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
   -webkit-tap-highlight-color: transparent;
