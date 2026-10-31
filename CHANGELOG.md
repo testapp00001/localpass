@@ -2,6 +2,21 @@
 
 All notable changes to LocalPass. Generated from commit messages (Conventional Commits) by git-cliff.
 
+## 0.2.1 - 2026-10-31
+
+### Added
+- Run LocalPass on Fedora Linux
+- **extension:** Firefox build, CI and release jobs for Fedora
+
+
+### Fixed
+- **app:** Keep the master-password check code off Windows and Android where unused
+
+
+### Maintenance
+- Use the sdkmanager name of the Android 37 platform
+
+
 ## 0.2.0 - 2026-10-25
 
 ### Maintenance
