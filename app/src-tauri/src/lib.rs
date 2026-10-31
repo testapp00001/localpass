@@ -116,12 +116,14 @@ enum UiEvent {
         request_id: u64,
     },
     /// A browser asks the user to prove it is them (Linux: type the master password). `reason`
-    /// is the cleaned text of what for, for example "Sign in to example.com".
+    /// is the cleaned text of what for, for example "Sign in to example.com". Windows uses Hello instead.
+    #[cfg(not(windows))]
     VerifyUser {
         request_id: u64,
         reason: String,
     },
     /// The client withdrew that check (or it ended): close the dialog.
+    #[cfg(not(windows))]
     VerifyUserCancelled {
         request_id: u64,
     },

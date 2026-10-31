@@ -165,7 +165,7 @@ pub struct AppHost {
 }
 
 /// How a master-password try for a browser's check went.
-#[cfg(not(windows))]
+#[cfg(all(desktop, not(windows)))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum VerifyOutcome {
@@ -178,7 +178,7 @@ pub enum VerifyOutcome {
 }
 
 /// Wrong tries after which a check is refused (the browser may ask again, which opens a new one).
-#[cfg(not(windows))]
+#[cfg(all(desktop, not(windows)))]
 const MAX_VERIFY_TRIES: u32 = 5;
 
 impl AppHost {
@@ -201,7 +201,7 @@ impl AppHost {
     /// Checks a master password typed into the dialog of an open check. Runs Argon2: call off
     /// the UI thread. Only requests opened by `verify_user` count, never a pairing or overwrite
     /// question. The try is counted before the check, so parallel tries can't get extra chances.
-    #[cfg(not(windows))]
+    #[cfg(all(desktop, not(windows)))]
     pub fn verify_password(
         &self,
         request_id: u64,
