@@ -4,7 +4,7 @@
 //! * [`framing`]: length-prefixed JSON messages over any byte stream.
 //! * [`protocol`]: the messages and requests.
 //! * [`clients`]: paired clients and their secrets.
-//! * [`pipe`]: the Windows named pipe the app listens on, and how clients find it.
+//! * [`pipe`]: the Windows named pipe (on Linux a Unix socket) the app listens on, and how clients find it.
 //! * [`client`] (feature `client`): a Rust client that does the handshake and sends requests.
 //!   It needs nothing from the engine, so the provider process stays small.
 //! * [`server`] (feature `server`): the handshake (pairing or challenge-response) and request

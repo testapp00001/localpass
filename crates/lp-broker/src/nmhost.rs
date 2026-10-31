@@ -13,13 +13,45 @@ pub const EXTENSION_ID: &str = "khlgdnhadbjfghhonaohnhdmedgnenlc";
 /// The name of the native-messaging host the extension asks for.
 pub const HOST_NAME: &str = "app.localpass.host";
 
-/// Whether `args` (the full command line) are those of a browser starting a native host.
-pub fn is_native_host_invocation(args: &[String]) -> bool {
-    args.get(1)
-        .is_some_and(|a| a.starts_with("chrome-extension://") || a.starts_with("moz-extension://"))
+/// The fixed id of the Firefox build of the extension (`browser_specific_settings.gecko.id` in
+/// the generated Firefox manifest). Firefox only lets the add-ons listed in `allowed_extensions`
+/// start the helper, and the helper checks it again.
+pub const FIREFOX_EXTENSION_ID: &str = "localpass@localpass.local";
+
+/// The file name of the host manifest. Firefox passes the manifest's path as the first argument.
+fn manifest_file_name() -> String {
+    format!("{HOST_NAME}.json")
 }
 
-/// The one origin allowed to talk to the helper.
+/// Whether `args` (the full command line) are those of a browser starting a native host.
+/// Chrome and Edge pass `<chrome-extension://id/>`; Firefox passes `<manifest path> <add-on id>`.
+pub fn is_native_host_invocation(args: &[String]) -> bool {
+    args.get(1).is_some_and(|a| {
+        a.starts_with("chrome-extension://")
+            || a.starts_with("moz-extension://")
+            || (args.len() >= 3 && is_firefox_manifest(a))
+    })
+}
+
+fn is_firefox_manifest(arg: &str) -> bool {
+    std::path::Path::new(arg)
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy() == manifest_file_name())
+}
+
+/// Whether the browser that started the helper is one we serve: Chrome/Edge with our extension's
+/// origin, or Firefox with our add-on's id.
+pub fn is_allowed_caller(args: &[String]) -> bool {
+    match args.get(1).map(String::as_str) {
+        Some(first) if first == allowed_origin() => true,
+        Some(first) if is_firefox_manifest(first) => {
+            args.get(2).map(String::as_str) == Some(FIREFOX_EXTENSION_ID)
+        }
+        _ => false,
+    }
+}
+
+/// The one origin allowed to talk to the helper (Chrome and Edge).
 pub fn allowed_origin() -> String {
     format!("chrome-extension://{EXTENSION_ID}/")
 }
@@ -27,10 +59,10 @@ pub fn allowed_origin() -> String {
 /// Starts the app when it isn't running. Returns once the process is spawned.
 pub type LaunchApp<'a> = &'a (dyn Fn() -> std::io::Result<()> + Sync);
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub use platform::run;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod platform {
     use std::io;
     use std::time::{Duration, Instant};
@@ -38,7 +70,7 @@ mod platform {
     use serde_json::json;
     use tokio::io::{AsyncRead, AsyncWrite};
 
-    use super::{LaunchApp, allowed_origin};
+    use super::{LaunchApp, is_allowed_caller};
     use crate::framing::{read_message, write_message};
     use crate::pipe;
 
@@ -61,7 +93,7 @@ mod platform {
         };
         runtime.block_on(async {
             let mut stdout = tokio::io::stdout();
-            if args.get(1).map(String::as_str) != Some(allowed_origin().as_str()) {
+            if !is_allowed_caller(args) {
                 tell_browser(
                     &mut stdout,
                     "forbidden",
@@ -87,9 +119,7 @@ mod platform {
     }
 
     /// Connects to the app, starting it first if the pipe isn't there.
-    async fn connect_or_start(
-        launch_app: LaunchApp<'_>,
-    ) -> io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
+    async fn connect_or_start(launch_app: LaunchApp<'_>) -> io::Result<pipe::Stream> {
         match pipe::connect().await {
             Ok(client) => return Ok(client),
             Err(e) if !pipe::app_not_running(&e) => return Err(e),
@@ -151,9 +181,9 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn run(_args: &[String], _launch_app: LaunchApp<'_>) -> i32 {
-    eprintln!("the native-messaging helper is only available on Windows");
+    eprintln!("the native-messaging helper is only available on Windows and Linux");
     2
 }
 
@@ -182,5 +212,31 @@ mod tests {
             allowed_origin(),
             format!("chrome-extension://{EXTENSION_ID}/")
         );
+    }
+
+    #[test]
+    fn firefox_invocations_are_recognised_and_checked() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let manifest = "/home/me/.mozilla/native-messaging-hosts/app.localpass.host.json";
+        let ours = args(&["localpass", manifest, FIREFOX_EXTENSION_ID]);
+        assert!(is_native_host_invocation(&ours));
+        assert!(is_allowed_caller(&ours));
+        // Another add-on id, no id at all, or another manifest file is not ours.
+        let other = args(&["localpass", manifest, "evil@example.com"]);
+        assert!(is_native_host_invocation(&other));
+        assert!(!is_allowed_caller(&other));
+        assert!(!is_native_host_invocation(&args(&["localpass", manifest])));
+        assert!(!is_allowed_caller(&args(&["localpass", manifest])));
+        let wrong_file = args(&["localpass", "/tmp/other.json", FIREFOX_EXTENSION_ID]);
+        assert!(!is_native_host_invocation(&wrong_file));
+        assert!(!is_allowed_caller(&wrong_file));
+        // Chrome's form still works, and only with our extension id.
+        let chrome = args(&["localpass", &allowed_origin(), "--parent-window=0"]);
+        assert!(is_allowed_caller(&chrome));
+        assert!(!is_allowed_caller(&args(&[
+            "localpass",
+            "chrome-extension://abc/"
+        ])));
+        assert!(!is_allowed_caller(&args(&["localpass"])));
     }
 }

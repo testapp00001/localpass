@@ -7,6 +7,7 @@ import { useToast } from "./components/Toaster";
 import { Onboarding } from "./screens/Onboarding";
 import { Unlock } from "./screens/Unlock";
 import { Shell } from "./screens/Shell";
+import { VerifyDialog } from "./components/VerifyDialog";
 import { ScanOverlay } from "./components/ScanOverlay";
 
 function applyTheme(theme: string) {
@@ -34,6 +35,8 @@ export default function App() {
     savedFor: string | null;
     sameHost: boolean;
   } | null>(null);
+  // A browser asks the user to prove it is them (Linux: the master password).
+  const [verify, setVerify] = useState<{ requestId: number; reason: string } | null>(null);
   const [lastSyncMs, setLastSyncMs] = useState<number | null>(null);
   const lastTouch = useRef(0);
 
@@ -94,6 +97,12 @@ export default function App() {
         case "confirmOverwriteCancelled":
           // The program that asked gave up; there is nothing left to answer.
           setOverwrite((current) => (current?.requestId === e.requestId ? null : current));
+          break;
+        case "verifyUser":
+          setVerify({ requestId: e.requestId, reason: e.reason });
+          break;
+        case "verifyUserCancelled":
+          setVerify((current) => (current?.requestId === e.requestId ? null : current));
           break;
         case "windowShown":
           window.dispatchEvent(new Event("lp-window-shown"));
@@ -188,6 +197,7 @@ export default function App() {
       {info.status === "locked" && <Unlock info={info} onUnlocked={refresh} />}
       {info.status === "unlocked" && <Shell info={info} lastSyncMs={lastSyncMs} onInfoChange={refresh} />}
       <ScanOverlay />
+      <VerifyDialog request={verify} onClose={() => setVerify(null)} />
 
       <Modal
         open={!!browserPairing}

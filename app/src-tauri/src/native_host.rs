@@ -20,6 +20,12 @@ fn launch_app() -> io::Result<()> {
     let exe = std::env::current_exe()?;
     let mut command = std::process::Command::new(exe);
     command.arg("--minimized");
+    // This helper's standard streams are the browser's native-messaging pipes: the app must not inherit them,
+    // or its log lines would be read by the browser as frames and the browser would never see the helper end.
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -36,6 +42,12 @@ fn launch_app() -> io::Result<()> {
             return Ok(());
         }
         command.creation_flags(flags);
+    }
+    #[cfg(unix)]
+    {
+        // Its own process group: the browser ending the helper's group does not take the app with it.
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
     }
     command.spawn().map(|_| ())
 }

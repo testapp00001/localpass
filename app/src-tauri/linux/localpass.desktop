@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=LocalPass
+{{#if comment}}Comment={{comment}}
+{{/if}}Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories={{categories}}
+Keywords=password;passkey;vault;
+StartupWMClass=localpass

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": [
+      "rpm"
+    ],
+    "category": "Utility",
+    "longDescription": "LocalPass keeps your passwords and passkeys in a vault that lives only on your own devices and syncs directly between them over your home network. There is no server, no account and no telemetry.",
+    "linux": {
+      "rpm": {
+        "depends": [
+          "libayatana-appindicator-gtk3"
+        ],
+        "desktopTemplate": "linux/localpass.desktop"
+      }
+    }
+  },
+  "productName": "localpass"
+}

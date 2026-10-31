@@ -60,6 +60,9 @@ clap = { version = "4", features = ["derive", "env"] }
 rpassword = "7"
 
 # Platform
+libc = "0.2"
+# The desktop keyring on Linux (GNOME Keyring, KWallet); pure Rust, blocking API used on a thread of its own
+secret-service = { version = "5.2", default-features = false, features = ["rt-async-io-crypto-rust"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Pipes", "Win32_System_Memory", "Win32_UI_Shell"] }
 # Async types the `windows` crate hands out; the app uses them to cancel a pending Windows Hello check
 windows-future = "0.3"

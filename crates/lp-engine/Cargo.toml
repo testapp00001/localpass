@@ -7,6 +7,8 @@ license.workspace = true
 
 [features]
 test-utils = ["lp-core/test-utils"]
+# Linux: protect local files with a key kept in the desktop keyring (see `secret.rs`).
+keyring = ["dep:secret-service"]
 
 [dependencies]
 lp-core.workspace = true
@@ -25,6 +27,9 @@ qrcode.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { workspace = true, optional = true }
 
 [dev-dependencies]
 lp-core = { workspace = true, features = ["test-utils"] }

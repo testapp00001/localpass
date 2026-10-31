@@ -51,8 +51,11 @@ pub use devices::{DeviceInfo, InviteInfo, PairingRequest};
 pub use error::{EngineError, Result};
 pub use import_export::ImportReport;
 pub use items::{FolderView, ItemInput, ItemQuery, ItemSummary, ItemView, PasskeyView, TotpCode};
+#[cfg(all(target_os = "linux", feature = "keyring"))]
+pub use secret::SecretServiceKeys;
 pub use secret::{
-    DeviceSecretStore, FileSecretStore, ProvidedSecret, protect_local, unprotect_local,
+    DeviceSecretStore, FileSecretStore, KeyedProtector, LocalKeySource, LocalProtect,
+    PlatformProtect, ProvidedSecret, platform_protector, protect_local, unprotect_local,
 };
 
 use keys::{VaultKeys, meta};
@@ -389,6 +392,33 @@ impl Engine {
         let kek = derive_kek(password, &salt, params)?;
         let keys = keys::open_vault_keys(&kek, b"vault", &ctx.vault_id, &ctx.me, &blob)?;
         self.finish_unlock(&ctx, keys)
+    }
+
+    /// Checks the master password without changing any state (the vault stays locked or
+    /// unlocked as it is). `Ok(false)` is a wrong password; runs Argon2id: call off the UI thread.
+    pub fn verify_password(&self, password: &str) -> Result<bool> {
+        let ctx = self.ctx()?;
+        let (salt, params, blob) = {
+            let store = self.store();
+            let salt = store
+                .meta_get(meta::KDF_SALT)?
+                .ok_or_else(|| EngineError::Invalid("missing salt".into()))?;
+            let params: KdfParams = cbor::from_slice(
+                &store
+                    .meta_get(meta::KDF_PARAMS)?
+                    .ok_or_else(|| EngineError::Invalid("missing KDF params".into()))?,
+            )?;
+            let blob = store
+                .meta_get(meta::KEYS_VAULT)?
+                .ok_or_else(|| EngineError::Invalid("missing keys".into()))?;
+            (salt, params, blob)
+        };
+        let kek = derive_kek(password, &salt, params)?;
+        match keys::open_vault_keys(&kek, b"vault", &ctx.vault_id, &ctx.me, &blob) {
+            Ok(_) => Ok(true),
+            Err(EngineError::WrongPassword) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     fn finish_unlock(&self, ctx: &VaultCtx, keys: VaultKeys) -> Result<()> {

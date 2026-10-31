@@ -1,8 +1,8 @@
 //! The native-messaging helper as a real child process: frames go in on its stdin and come out
 //! of its stdout exactly as a browser would use it, with the app on the other side of a real
-//! named pipe.
+//! named pipe (on Linux, a Unix socket in a runtime folder of the test's own).
 
-#![cfg(windows)]
+#![cfg(any(windows, target_os = "linux"))]
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -53,7 +53,24 @@ fn helper_path() -> PathBuf {
     let mut path = std::env::current_exe().unwrap();
     path.pop();
     path.pop();
-    path.join("examples").join("nmhost.exe")
+    path.join("examples")
+        .join(format!("nmhost{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// The runtime folder the tests' sockets live in (Linux), so no test ever touches the user's own.
+#[cfg(target_os = "linux")]
+fn runtime_dir() -> &'static std::path::Path {
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| tempfile::tempdir().unwrap()).path()
+}
+
+fn kill(pid: u32) {
+    #[cfg(windows)]
+    let _ = Command::new("taskkill")
+        .args(["/F", "/PID", &pid.to_string()])
+        .output();
+    #[cfg(not(windows))]
+    let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
 }
 
 struct Helper {
@@ -62,20 +79,22 @@ struct Helper {
 
 impl Helper {
     fn start(origin: &str, profile: &str) -> Self {
-        let child = Command::new(helper_path())
+        let mut command = Command::new(helper_path());
+        command
             .arg(origin)
             .env("LOCALPASS_PROFILE", profile)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::piped());
+        #[cfg(target_os = "linux")]
+        command.env("XDG_RUNTIME_DIR", runtime_dir());
+        let child = command
             .spawn()
             .expect("start the helper (is the nmhost example built?)");
         // A stuck helper must not hang the test run.
         let pid = child.id();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(30));
-            let _ = Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
-                .output();
+            kill(pid);
         });
         Self { child }
     }
@@ -112,8 +131,12 @@ fn start_app(
     tokio::task::JoinHandle<std::io::Result<()>>,
     tempfile::TempDir,
 ) {
-    // SAFETY: only this test binary reads the variable, before the pipe is created.
+    // SAFETY: only this test binary reads the variables, before the pipe is created.
     unsafe { std::env::set_var("LOCALPASS_PROFILE", profile) };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        std::env::set_var("XDG_RUNTIME_DIR", runtime_dir())
+    };
     let dir = tempfile::tempdir().unwrap();
     let mut config = EngineConfig::new(dir.path(), "test");
     config.kdf = KdfParams::insecure_for_tests();

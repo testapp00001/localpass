@@ -194,7 +194,21 @@ async fn phone_home_work_story() {
     home.unlock("home master pw").unwrap();
     assert!(titles(&home).contains(&"Wiki".to_string()));
     assert!(matches!(home.unlock("wrong"), Ok(())), "already unlocked");
+    assert!(home.verify_password("home master pw").unwrap());
+    assert!(!home.verify_password("not the password").unwrap());
+    assert_eq!(
+        home.status(),
+        VaultStatus::Unlocked,
+        "a check changes nothing"
+    );
     home.lock();
+    assert!(home.verify_password("home master pw").unwrap());
+    assert!(!home.verify_password("not the password").unwrap());
+    assert_eq!(
+        home.status(),
+        VaultStatus::Locked,
+        "a check changes nothing"
+    );
     assert!(matches!(
         home.unlock("not the password"),
         Err(EngineError::WrongPassword)

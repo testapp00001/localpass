@@ -348,10 +348,10 @@ async fn passkeys_over_the_protocol_need_the_user_check() {
         )
         .expect("signature verifies");
 
-    // The user is told which site is asking: the site's name and id when creating, the id when
+    // The user is told which site is asking: the site id and name when creating, the id when
     // signing in.
     let reasons = s.host.reasons.lock().unwrap().clone();
-    assert_eq!(reasons[0], "Create a passkey for Example (example.com)");
+    assert_eq!(reasons[0], "Create a passkey for example.com (\"Example\")");
     assert!(
         reasons.contains(&"Sign in to example.com".to_string()),
         "{reasons:?}"
@@ -941,14 +941,22 @@ async fn the_library_client_reports_why_a_request_failed() {
     assert!(matches!(c.request(&create).await, Err(ClientError::Denied)));
 }
 
-/// The same handshake over the real Windows named pipe (a private name for this test).
-#[cfg(windows)]
+/// The same handshake over the real Windows named pipe, or the Unix socket on Linux (a private name,
+/// and on Linux a private runtime folder, for this test).
+#[cfg(any(windows, target_os = "linux"))]
 #[tokio::test]
 async fn the_real_named_pipe_works_and_cannot_be_squatted() {
     let profile = format!("brokertest-{}", std::process::id());
+    // The socket goes in a folder of this test, never in the user's real runtime folder.
+    #[cfg(target_os = "linux")]
+    let runtime = tempfile::tempdir().unwrap();
     // SAFETY: this is the only test in the binary that touches the environment, and it runs
     // before any pipe code reads it.
     unsafe { std::env::set_var("LOCALPASS_PROFILE", &profile) };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        std::env::set_var("XDG_RUNTIME_DIR", runtime.path())
+    };
     assert!(lp_broker::pipe::pipe_name().contains("brokertest-"));
     assert_eq!(
         lp_broker::pipe::pipe_name_for(Some(&profile)),

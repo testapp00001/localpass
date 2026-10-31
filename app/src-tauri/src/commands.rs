@@ -87,17 +87,32 @@ fn biometric_blob_path(state: &AppState) -> std::path::PathBuf {
     state.data_dir.join("biometric.blob")
 }
 
+/// The computer's name as a start for the device name ("Fedora" for `fedora.localdomain`).
 fn suggested_name() -> String {
-    std::env::var("COMPUTERNAME")
+    let name = std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
-        .map(|n| {
-            let lower = n.to_lowercase();
-            let mut c = lower.chars();
-            c.next()
-                .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
-                .unwrap_or_default()
-        })
-        .unwrap_or_else(|_| "My device".into())
+        .ok()
+        .or_else(hostname_file);
+    name.as_deref()
+        .and_then(pretty_name)
+        .unwrap_or_else(|| "My device".into())
+}
+
+/// Desktop sessions on Linux don't export `HOSTNAME`; the system keeps it in this file.
+fn hostname_file() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/etc/hostname").ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
+fn pretty_name(raw: &str) -> Option<String> {
+    let host = raw.trim().split('.').next()?.to_lowercase();
+    let mut c = host.chars();
+    let first = c.next()?;
+    Some(first.to_uppercase().collect::<String>() + c.as_str())
 }
 
 /// Settings with `start_at_login` reflecting the real OS autostart state.
@@ -653,13 +668,17 @@ fn extension_folder(app: &AppHandle) -> Option<std::path::PathBuf> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserStatus {
-    /// The connection to browsers exists on Windows only.
+    /// The connection to browsers exists on Windows and Linux.
     available: bool,
+    /// `windows` or `linux`: how the UI words the registration and the "is it you?" check.
+    os: &'static str,
     extension_id: &'static str,
     extension_folder: Option<String>,
     /// Chrome and Edge find the helper (the registration points at this copy of the app).
     chrome: bool,
     edge: bool,
+    /// Firefox finds the helper (Linux).
+    firefox: bool,
     clients: Vec<crate::broker::ClientInfo>,
 }
 
@@ -681,7 +700,7 @@ fn browser_status_of(app: &AppHandle, state: &AppState) -> BrowserStatus {
         })
         .unwrap_or_default();
     #[cfg(windows)]
-    let (available, chrome, edge) = {
+    let (available, os, chrome, edge, firefox) = {
         let exe = std::env::current_exe().unwrap_or_default();
         let registered = |name: &str| {
             crate::native_messaging::BROWSERS
@@ -691,19 +710,35 @@ fn browser_status_of(app: &AppHandle, state: &AppState) -> BrowserStatus {
                     crate::native_messaging::is_registered(key, &state.data_dir, &exe)
                 })
         };
-        (true, registered("Chrome"), registered("Edge"))
+        (
+            true,
+            "windows",
+            registered("Chrome"),
+            registered("Edge"),
+            false,
+        )
     };
-    #[cfg(not(windows))]
-    let (available, chrome, edge) = {
+    #[cfg(target_os = "linux")]
+    let (available, os, chrome, edge, firefox) = {
         let _ = state;
-        (false, false, false)
+        let exe = std::env::current_exe().unwrap_or_default();
+        let firefox = crate::native_messaging::home_dir()
+            .is_ok_and(|home| crate::native_messaging::is_registered(&home, &exe));
+        (true, "linux", false, false, firefox)
+    };
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let (available, os, chrome, edge, firefox) = {
+        let _ = state;
+        (false, "", false, false, false)
     };
     BrowserStatus {
         available,
+        os,
         extension_id: lp_broker::nmhost::EXTENSION_ID,
         extension_folder: extension_folder(app).map(|p| p.display().to_string()),
         chrome,
         edge,
+        firefox,
         clients,
     }
 }
@@ -713,7 +748,8 @@ pub fn browser_status(app: AppHandle, state: State<'_, AppState>) -> BrowserStat
     browser_status_of(&app, &state)
 }
 
-/// Lets Chrome and Edge start LocalPass as the extension's helper.
+/// Lets the browsers start LocalPass as the extension's helper (Chrome and Edge on Windows,
+/// Firefox on Linux).
 #[tauri::command]
 pub fn browser_install(app: AppHandle, state: State<'_, AppState>) -> CmdResult<BrowserStatus> {
     #[cfg(windows)]
@@ -722,10 +758,17 @@ pub fn browser_install(app: AppHandle, state: State<'_, AppState>) -> CmdResult<
         crate::native_messaging::install(&state.data_dir, &exe).map_err(err)?;
         Ok(browser_status_of(&app, &state))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let exe = std::env::current_exe().map_err(err)?;
+        let home = crate::native_messaging::home_dir().map_err(err)?;
+        crate::native_messaging::install(&home, &exe).map_err(err)?;
+        Ok(browser_status_of(&app, &state))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (&app, &state);
-        Err("the browser connection is only available on Windows".into())
+        Err("the browser connection is not available on this system".into())
     }
 }
 
@@ -733,6 +776,9 @@ pub fn browser_install(app: AppHandle, state: State<'_, AppState>) -> CmdResult<
 pub fn browser_remove(app: AppHandle, state: State<'_, AppState>) -> CmdResult<BrowserStatus> {
     #[cfg(windows)]
     crate::native_messaging::remove(&state.data_dir).map_err(err)?;
+    #[cfg(target_os = "linux")]
+    crate::native_messaging::remove(&crate::native_messaging::home_dir().map_err(err)?)
+        .map_err(err)?;
     Ok(browser_status_of(&app, &state))
 }
 
@@ -752,8 +798,26 @@ pub fn browser_client_remove(app: AppHandle, id: String) -> CmdResult<()> {
 pub fn broker_respond(app: AppHandle, request_id: u64, approve: bool) {
     use tauri::Manager;
     if let Some(broker) = app.try_state::<crate::broker::BrokerState>() {
-        broker.host.approvals().resolve(request_id, approve);
+        broker.host.respond(request_id, approve);
     }
+}
+
+/// A master password typed into the dialog of a browser's "is it you?" check (Linux). A wrong
+/// password keeps the dialog open; the fifth wrong one or `broker_respond(id, false)` refuses.
+#[cfg(all(desktop, not(windows)))]
+#[tauri::command]
+pub async fn broker_verify(
+    app: AppHandle,
+    request_id: u64,
+    password: String,
+) -> CmdResult<crate::broker::VerifyOutcome> {
+    use tauri::Manager;
+    let broker = app
+        .try_state::<crate::broker::BrokerState>()
+        .ok_or("the browser connection is not running")?;
+    let host = broker.host.clone();
+    let password = Zeroizing::new(password);
+    blocking(move || host.verify_password(request_id, &password)).await
 }
 
 /// Opens the folder with the built extension in Explorer, for "Load unpacked".
@@ -915,5 +979,21 @@ pub async fn android_open_setup(app: AppHandle, target: String) -> CmdResult<()>
     {
         let _ = (app, target);
         Err("this is only available on Android".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pretty_name;
+
+    #[test]
+    fn device_name_suggestions_come_from_the_first_label() {
+        assert_eq!(
+            pretty_name("fedora.localdomain\n").as_deref(),
+            Some("Fedora")
+        );
+        assert_eq!(pretty_name("WORK-PC").as_deref(), Some("Work-pc"));
+        assert_eq!(pretty_name("  \n"), None);
+        assert_eq!(pretty_name(""), None);
     }
 }

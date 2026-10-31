@@ -500,13 +500,13 @@ fn finish(envelope: ResponseEnvelope) -> Result<Value, ClientError> {
     Err(ClientError::remote(error.code, error.message))
 }
 
-/// Opens the app's named pipe (see [`crate::pipe::pipe_name_for`] for `profile`) and logs in.
-#[cfg(windows)]
+/// Opens the app's named pipe or socket (see [`crate::pipe::pipe_name_for`] for `profile`) and logs in.
+#[cfg(any(windows, target_os = "linux"))]
 pub async fn connect_pipe(
     profile: Option<&str>,
     options: &Options,
     credentials: &Credentials,
-) -> Result<Client<tokio::net::windows::named_pipe::NamedPipeClient>, ClientError> {
+) -> Result<Client<crate::pipe::Stream>, ClientError> {
     let pipe = step(
         "open the pipe",
         options.timeouts.step,
@@ -516,19 +516,13 @@ pub async fn connect_pipe(
     Client::connect(pipe, options, credentials).await
 }
 
-/// Opens the app's named pipe and pairs; see [`Client::pair`].
-#[cfg(windows)]
+/// Opens the app's named pipe or socket and pairs; see [`Client::pair`].
+#[cfg(any(windows, target_os = "linux"))]
 pub async fn pair_pipe(
     profile: Option<&str>,
     options: &Options,
     on_code: impl FnOnce(&str),
-) -> Result<
-    (
-        Client<tokio::net::windows::named_pipe::NamedPipeClient>,
-        Paired,
-    ),
-    ClientError,
-> {
+) -> Result<(Client<crate::pipe::Stream>, Paired), ClientError> {
     let pipe = step(
         "open the pipe",
         options.timeouts.step,

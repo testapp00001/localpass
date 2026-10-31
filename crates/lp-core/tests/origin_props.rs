@@ -229,7 +229,8 @@ proptest! {
         letter in 0usize..9,
     ) {
         let Some(page) = https(&base) else { return Ok(()); };
-        let domain = psl::domain_str(&page.host).unwrap().to_string();
+        // A generated host can itself be a public suffix (`a.r.appspot.com`): no domain to imitate.
+        let Some(domain) = psl::domain_str(&page.host).map(str::to_string) else { return Ok(()); };
         let base_domain = Some(domain.clone());
         prop_assume!(psl::domain_str(&evil) != base_domain.as_deref());
         // A look-alike letter from another alphabet (never one that IDNA folds back to ASCII).
@@ -388,7 +389,7 @@ proptest! {
         let cut = &origin.host[1..];
         prop_assert!(validate_rp_id(cut, &origin).is_err(), "{} for {}", cut, origin.host);
         // The registrable domain itself, and every name between it and the host, are fine.
-        let domain = psl::domain_str(&origin.host).unwrap().to_string();
+        let Some(domain) = psl::domain_str(&origin.host).map(str::to_string) else { return Ok(()); };
         prop_assert!(validate_rp_id(&domain, &origin).is_ok(), "{} for {}", domain, origin.host);
     }
 

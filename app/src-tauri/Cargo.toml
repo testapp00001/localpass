@@ -35,6 +35,10 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 arboard = { version = "3", default-features = false }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# The device secret and the paired clients are sealed with a key in the desktop keyring.
+lp-engine = { workspace = true, features = ["keyring"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 

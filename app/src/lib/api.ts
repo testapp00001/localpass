@@ -219,10 +219,13 @@ export interface BrowserClient {
 
 export interface BrowserStatus {
   available: boolean;
+  /** "windows" or "linux". */
+  os: string;
   extensionId: string;
   extensionFolder: string | null;
   chrome: boolean;
   edge: boolean;
+  firefox: boolean;
   clients: BrowserClient[];
 }
 
@@ -258,6 +261,8 @@ export type UiEvent =
   | { type: "extensionPairingCancelled"; requestId: number }
   | { type: "confirmOverwrite"; requestId: number; kind: "login" | "passkey"; title: string; username: string; site: string; savedFor: string | null; sameHost: boolean }
   | { type: "confirmOverwriteCancelled"; requestId: number }
+  | { type: "verifyUser"; requestId: number; reason: string }
+  | { type: "verifyUserCancelled"; requestId: number }
   | { type: "windowShown" };
 
 /** One part of the phone's set-up: "unknown" means Android does not let an app read it. */
@@ -342,6 +347,9 @@ export const api = {
   browserRemove: () => invoke<BrowserStatus>("browser_remove"),
   browserClientRemove: (id: string) => invoke<void>("browser_client_remove", { id }),
   brokerRespond: (requestId: number, approve: boolean) => invoke<void>("broker_respond", { requestId, approve }),
+  /** Linux: the master password for a browser's "is it you?" check. */
+  brokerVerify: (requestId: number, password: string) =>
+    invoke<"accepted" | "wrong" | "refused">("broker_verify", { requestId, password }),
   openExtensionFolder: () => invoke<void>("open_extension_folder"),
   windowsPasskeysStatus: () => invoke<WindowsPasskeysStatus>("windows_passkeys_status"),
   windowsPasskeysSetup: () => invoke<WindowsPasskeysStatus>("windows_passkeys_setup"),

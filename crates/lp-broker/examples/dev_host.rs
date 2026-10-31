@@ -106,12 +106,12 @@ async fn main() {
         clients: MemoryClientStore::default(),
     });
     let (stop, stopped) = tokio::sync::watch::channel(false);
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     let server = tokio::spawn(lp_broker::pipe::serve(Broker::new(host), stopped));
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (host, stopped, Broker::<DevHost>::new);
-        panic!("the dev host needs Windows named pipes");
+        panic!("the dev host needs Windows named pipes or Linux sockets");
     }
 
     let mut events = engine.subscribe();
@@ -144,11 +144,11 @@ async fn main() {
         std::process::exit(0);
     });
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     {
         let _ = server.await;
         drop(stop);
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     drop(stop);
 }

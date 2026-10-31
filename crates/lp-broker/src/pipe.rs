@@ -1,6 +1,7 @@
-//! The named pipe the app listens on. Only the user who runs the app can open it, and remote
-//! connections are refused. Clients prove they know their secret, and the app proves the same
-//! back, so a process that grabs the pipe name first still can't pass itself off as the app.
+//! The named pipe the app listens on (on Linux, a Unix socket in the user's runtime folder: see
+//! `unix`). Only the user who runs the app can open it, and remote connections are refused. Clients
+//! prove they know their secret, and the app proves the same back, so a process that grabs the pipe
+//! name first still can't pass itself off as the app.
 
 use std::io;
 
@@ -25,6 +26,14 @@ fn clean_profile(profile: &str) -> Option<String> {
 /// pipe of a normal install). Clients that don't inherit the app's environment, such as the
 /// Windows passkey provider, pass the profile themselves.
 pub fn pipe_name_for(profile: Option<&str>) -> String {
+    #[cfg(target_os = "linux")]
+    return unix::name_for(profile);
+    #[cfg(not(target_os = "linux"))]
+    named_pipe_name(profile)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn named_pipe_name(profile: Option<&str>) -> String {
     let user = platform::user_id();
     match profile.and_then(clean_profile) {
         Some(p) => format!(r"\\.\pipe\localpass-broker-v1-{user}-{p}"),
@@ -40,7 +49,14 @@ pub fn pipe_name() -> String {
 #[cfg(all(windows, feature = "server"))]
 pub use platform::serve;
 #[cfg(windows)]
-pub use platform::{connect, connect_profile};
+pub use platform::{Stream, connect, connect_profile};
+
+#[cfg(target_os = "linux")]
+mod unix;
+#[cfg(all(target_os = "linux", feature = "server"))]
+pub use unix::serve;
+#[cfg(target_os = "linux")]
+pub use unix::{Stream, connect, connect_profile};
 
 #[cfg(windows)]
 mod platform {
@@ -51,6 +67,9 @@ mod platform {
 
     use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
     use tracing::debug;
+
+    /// What a client holds once connected.
+    pub type Stream = NamedPipeClient;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
     use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
     use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
@@ -324,14 +343,18 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
     pub fn user_id() -> String {
         std::env::var("USER").unwrap_or_else(|_| "user".into())
     }
 }
 
-/// Whether an error from [`connect`] means the app is not running.
+/// Whether an error from [`connect`] means the app is not running: no pipe or socket file, or (Linux) a
+/// socket file a crashed app left behind that nothing answers on.
 pub fn app_not_running(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::NotFound
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+    )
 }

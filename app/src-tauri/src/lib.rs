@@ -15,7 +15,7 @@ mod hello;
 #[cfg(target_os = "android")]
 mod mobile;
 pub mod native_host;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod native_messaging;
 mod settings;
 mod windows_passkeys;
@@ -115,6 +115,16 @@ enum UiEvent {
     ConfirmOverwriteCancelled {
         request_id: u64,
     },
+    /// A browser asks the user to prove it is them (Linux: type the master password). `reason`
+    /// is the cleaned text of what for, for example "Sign in to example.com".
+    VerifyUser {
+        request_id: u64,
+        reason: String,
+    },
+    /// The client withdrew that check (or it ended): close the dialog.
+    VerifyUserCancelled {
+        request_id: u64,
+    },
     /// The user opened the window (tray icon or starting the app again). The unlock screen
     /// then offers Windows Hello if it had held back while the window was hidden.
     #[cfg(desktop)]
@@ -168,6 +178,28 @@ fn data_dir(app: &AppHandle) -> PathBuf {
     match std::env::var("LOCALPASS_PROFILE") {
         Ok(p) if !p.trim().is_empty() => base.join("profiles").join(p.trim()),
         _ => base,
+    }
+}
+
+/// How files that only this user may read back are protected: DPAPI on Windows, a key in the system
+/// keyring on Linux (one entry per `LOCALPASS_PROFILE`), nothing extra elsewhere (Android hands the
+/// engine its Keystore secret instead).
+fn local_protector(dir: &std::path::Path) -> std::sync::Arc<dyn lp_engine::LocalProtect> {
+    #[cfg(target_os = "linux")]
+    {
+        let profile = std::env::var("LOCALPASS_PROFILE")
+            .ok()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+        std::sync::Arc::new(lp_engine::KeyedProtector::new(
+            lp_engine::SecretServiceKeys::new(profile.as_deref())
+                .guarding([dir.join("device.key"), dir.join("broker-clients.bin")]),
+        ))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = dir;
+        lp_engine::platform_protector()
     }
 }
 
@@ -368,8 +400,16 @@ pub fn run() {
             let handle = app.handle().clone();
             let dir = data_dir(&handle);
             std::fs::create_dir_all(&dir)?;
+            // The vault file holds the wrapped keys and the KDF salt: on Linux other local users must not read the folder
+            // (Windows keeps it under the user's profile ACL).
+            #[cfg(all(unix, not(target_os = "android")))]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+            }
             #[cfg(desktop)]
             applog::open(&dir);
+            let protector = local_protector(&dir);
             // On Android the process may already have opened the engine for a credential
             // service or the sync worker; share it.
             #[cfg(target_os = "android")]
@@ -383,7 +423,10 @@ pub fn run() {
             let engine = {
                 let config = lp_engine::EngineConfig::new(&dir, platform());
                 let secrets: std::sync::Arc<dyn lp_engine::DeviceSecretStore> =
-                    std::sync::Arc::new(lp_engine::FileSecretStore::new(dir.join("device.key")));
+                    std::sync::Arc::new(lp_engine::FileSecretStore::with_protector(
+                        dir.join("device.key"),
+                        protector.clone(),
+                    ));
                 Engine::open(config, secrets)?
             };
             info!(data_dir = %dir.display(), status = ?engine.status(), "LocalPass starting");
@@ -397,7 +440,7 @@ pub fn run() {
                 data_dir: dir,
                 last_activity: Mutex::new(Instant::now()),
             });
-            broker::start(&handle, engine.clone(), &broker_dir);
+            broker::start(&handle, engine.clone(), &broker_dir, protector);
             #[cfg(windows)]
             windows_passkeys::start(&handle, engine.clone());
             start_background(&handle, engine);
@@ -468,6 +511,8 @@ pub fn run() {
             commands::browser_remove,
             commands::browser_client_remove,
             commands::broker_respond,
+            #[cfg(all(desktop, not(windows)))]
+            commands::broker_verify,
             commands::open_extension_folder,
             commands::windows_passkeys_status,
             commands::windows_passkeys_setup,

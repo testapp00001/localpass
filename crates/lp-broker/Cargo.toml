@@ -28,6 +28,9 @@ zeroize.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 lp-core = { workspace = true, features = ["test-utils"] }
 proptest.workspace = true

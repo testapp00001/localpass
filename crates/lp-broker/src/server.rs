@@ -233,15 +233,15 @@ fn is_invisible(c: char) -> bool {
     )
 }
 
-/// What the user is told when a passkey is about to be created: the site's name when it has
-/// one, always with the site id, which is the part a clever name cannot fake.
+/// What the user is told when a passkey is about to be created: the site id first (the part a
+/// clever name cannot fake), then the site's name in quotes when it has one.
 fn create_reason(rp_name: &str, rp_id: &str) -> String {
     let name = display_text(rp_name);
     let id = display_text(rp_id);
     if name.is_empty() || name == id {
         format!("Create a passkey for {id}")
     } else {
-        format!("Create a passkey for {name} ({id})")
+        format!("Create a passkey for {id} (\"{name}\")")
     }
 }
 
@@ -991,7 +991,7 @@ mod tests {
     fn prompt_text_from_websites_is_made_safe() {
         assert_eq!(
             create_reason("Example", "example.com"),
-            "Create a passkey for Example (example.com)"
+            "Create a passkey for example.com (\"Example\")"
         );
         assert_eq!(
             create_reason("", "example.com"),
@@ -1005,7 +1005,7 @@ mod tests {
         let reason = create_reason("Bank\r\nApprove ALL\u{7}", "evil.example");
         assert_eq!(
             reason,
-            "Create a passkey for BankApprove ALL (evil.example)"
+            "Create a passkey for evil.example (\"BankApprove ALL\")"
         );
         let long = create_reason(&"x".repeat(500), "a.example");
         assert!(long.chars().count() < 100, "{long}");
