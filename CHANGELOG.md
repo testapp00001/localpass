@@ -2,6 +2,16 @@
 
 All notable changes to LocalPass. Generated from commit messages (Conventional Commits) by git-cliff.
 
+## 0.2.2 - 2026-10-31
+
+### Documentation
+- Note the v0.2.1 draft release in the Phase 6 handoff
+
+
+### Fixed
+- **app:** Follow the app theme in native controls, so dark selects are readable on Linux
+
+
 ## 0.2.1 - 2026-10-31
 
 ### Added
