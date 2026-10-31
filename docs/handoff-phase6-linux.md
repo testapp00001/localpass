@@ -18,6 +18,14 @@ unless asked.
 
 Shell setup for every command: `export PATH=$HOME/.cargo/bin:$HOME/.bun/bin:$PATH`.
 
+## v0.2.1 released as a DRAFT (2026-10-31)
+
+Tag `v0.2.1` pushed (user approved). CI and the Release run both fully green on the first try: `linux` (Fedora RPM in `fedora:44`), `firefox` (signed by AMO),
+Windows, Android, and the Linux CI job with the Firefox e2e on ubuntu-latest. Draft assets: NSIS installer, APK, RPM, extension zip, signed XPI, SHA256SUMS.
+Checked from the draft: RPM and XPI hashes match SHA256SUMS; the XPI has `META-INF/mozilla.rsa`, id `localpass@localpass.local` (now permanent); installed
+into a throwaway Firefox 158 profile it is active with `signedState 2` and survives a restart. NOT done: publishing the draft (the user's step), a real
+`sudo dnf install` + tray/GUI on this desktop, the real-keyring test, L1's real path, I1 (pin `fedora:44` digest; the job has now run once).
+
 ## Next: 6.7 (move the home laptop over, assisted) and the open items below, fresh chat
 
 **6.6d is done (2026-10-30)**: security review in `docs/phase6-security-review.md` (no High/Medium; L1-L4 fixed, see 6.6d entry), README
