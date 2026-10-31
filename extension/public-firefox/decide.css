@@ -1,0 +1,11 @@
+/* The decision window (Firefox): the popup's look, as a window of its own. */
+body { width: auto; }
+header #site { max-width: none; }
+main { max-height: none; padding: 16px; }
+.lead { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.line { overflow-wrap: anywhere; }
+.rows { margin: 8px -8px; }
+.row { display: block; width: 100%; text-align: left; border: 0; border-radius: 8px; padding: 8px; }
+.row:hover, .row:focus { background: var(--hover); outline: none; }
+.row .sub { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.buttons { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }

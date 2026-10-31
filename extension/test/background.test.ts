@@ -3,7 +3,7 @@
 // per-keystroke searching, and what happens when the app declines (Replace? / Hello).
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { type FakeChrome, type Json, installChrome, until } from "./chrome";
+import { type FakeChrome, type Json, installChrome, installWindows, until } from "./chrome";
 import { AppError, honestApp, seedCredentials } from "./fakeapp";
 
 const EXT = "khlgdnhadbjfghhonaohnhdmedgnenlc";
@@ -83,6 +83,64 @@ describe("who may ask", () => {
     await boot();
     await call({ kind: "capture", username: "u", password: "p" }, page());
     expect(fake.local.log[0]).toBe("setAccessLevel:TRUSTED_CONTEXTS");
+  });
+});
+
+describe("Firefox senders (F3, F7)", () => {
+  test("a moz-extension:// page is an extension page, not a web page, so it can use the popup-only messages", async () => {
+    await boot();
+    // Firefox names its own pages moz-extension://; the worker compares with the extension's own base URL.
+    (globalThis as unknown as { chrome: typeof chrome }).chrome.runtime.getURL = (path: string) => `moz-extension://abc/${path}`;
+    const mozPopup = { id: EXT, url: "moz-extension://abc/popup.html", tab: { id: 1, url: "moz-extension://abc/popup.html" } };
+    expect((await call({ kind: "cachedLogins" }, mozPopup)).ok).toBe(true);
+    // A web page with the same shape of sender is still refused.
+    expect(await call({ kind: "cachedLogins" }, page())).toMatchObject({ ok: false, code: "forbidden" });
+  });
+
+  test("a sandboxed frame (sender.origin is the string \"null\" but sender.url is real) is never served", async () => {
+    await boot();
+    const sandboxed = { id: EXT, url: "https://a.example/frame", origin: "null", frameId: 9, tab: { id: 7, url: "https://a.example/" } };
+    for (const message of [{ kind: "findLogins", interactive: true }, { kind: "fill", itemId: "i1" }]) {
+      expect(await call(message, sandboxed), JSON.stringify(message)).toMatchObject({ ok: false, code: "invalid" });
+    }
+    expect(requests).toEqual([]);
+  });
+});
+
+describe("Firefox decision windows are only for Firefox pages", () => {
+  const flag = globalThis as unknown as { __FIREFOX__: boolean };
+  const decide = { kind: "decide", ref: "r1", request: { decision: "chooseLogin" } };
+
+  test("the Chrome build refuses every decision message, from anyone", async () => {
+    await boot();
+    const windows = installWindows();
+    const kinds = [decide, { kind: "decisionInfo", id: "x" }, { kind: "decisionLogins", id: "x" }, { kind: "decisionCandidates", id: "x" }, { kind: "decisionAnswer", id: "x", answer: { action: "cancel" } }, { kind: "decideCancel", ref: "r1" }];
+    for (const message of kinds.filter((m) => m.kind === "decide" || m.kind === "decideCancel")) {
+      expect(await call(message, page()), JSON.stringify(message)).toMatchObject({ ok: false, code: "forbidden" });
+    }
+    expect(windows.created).toEqual([]);
+  });
+
+  test("the Firefox build opens a window for a page, not for the popup, and the window's own messages need its own address", async () => {
+    await boot();
+    const windows = installWindows();
+    flag.__FIREFOX__ = true;
+    try {
+      // The popup (an extension page) may not ask for a decision on behalf of a site.
+      expect(await call(decide, popup)).toMatchObject({ ok: false, code: "forbidden" });
+      expect(windows.created).toEqual([]);
+      void call(decide, page("https://a.example/login", 7));
+      await until(() => windows.created.length === 1);
+      const id = new URL(windows.created[0]!.url).searchParams.get("id")!;
+      // A page's content script cannot read or answer it, and neither can the popup.
+      for (const sender of [page("https://a.example/login", 7), popup]) {
+        expect(await call({ kind: "decisionInfo", id }, sender)).toMatchObject({ ok: false, code: "forbidden" });
+      }
+      const window = { id: EXT, url: windows.created[0]!.url, tab: { id: 1, windowId: windows.created[0]!.windowId } };
+      expect(await call({ kind: "decisionInfo", id }, window)).toMatchObject({ ok: true, data: { decision: "chooseLogin", origin: "https://a.example" } });
+    } finally {
+      flag.__FIREFOX__ = false;
+    }
   });
 });
 

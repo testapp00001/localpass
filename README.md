@@ -90,9 +90,11 @@ Android 17 and isn't worth the risk for this reflection-heavy stack.
 LocalPass has no updater and never connects to the internet to look for one (by design). Releases are
 published on the [GitHub release page](https://github.com/testapp00001/localpass/releases); Settings has a
 **Releases** link that opens it in your browser. Looking for a new version is up to you. A release is
-four files: the Windows installer (`LocalPass_<version>_x64-setup.exe`), the Android APK
-(`localpass-<version>-universal-release.apk`, for 64-bit ARM phones and x86_64 emulators), the browser
-extension (`localpass-extension-<version>.zip`) and `SHA256SUMS.txt`. The app and the extension share one
+six files: the Windows installer (`LocalPass_<version>_x64-setup.exe`), the Fedora RPM
+(`localpass-<version>-1.x86_64.rpm`), the Android APK
+(`localpass-<version>-universal-release.apk`, for 64-bit ARM phones and x86_64 emulators), the Chrome and
+Edge extension (`localpass-extension-<version>.zip`), the signed Firefox extension
+(`localpass-firefox-<version>.xpi`) and `SHA256SUMS.txt`. The app and the extension share one
 version number; update both together. Download the files (or copy them to each device by USB stick or shared
 folder) and check them first:
 
@@ -114,6 +116,16 @@ touched. After the update, reload the extension: open `chrome://extensions` (or 
 install folder, which the installer has just replaced. Keep the install folder the same, because the Windows passkey
 provider and the browser registration point into it; if Windows passkeys stop working after an update, choose
 **Set up again** in Settings → Windows passkeys.
+
+**Fedora Linux.** Install the RPM with `sudo dnf install ./localpass-<version>-1.x86_64.rpm`. The same command
+with a newer RPM updates it in place, and everything per user stays: the vault and settings
+(`~/.local/share/app.localpass`), the Firefox registration (`~/.mozilla/native-messaging-hosts`) and the
+start-at-login entry (`~/.config/autostart`). The RPM is not signed; check its SHA-256 line first. GNOME shows
+the tray icon only with the extension *AppIndicator and KStatusNotifierItem Support*.
+`sudo dnf remove localpass` removes only the program files and those per-user files stay, so before removing
+it turn off Settings → Browser extension and start at login, and delete the data folder yourself if you want
+the vault gone from that computer. Look at the folder before deleting it: it is the only copy on that device.
+To update the Firefox extension, install the new `.xpi` the same way as the first one (see "Firefox on Fedora Linux").
 
 **Android.** Copy the APK to the phone and open it; Android asks once to allow installing from that app.
 To update, install the new APK over the old one. This works because every release is signed with the same
@@ -141,7 +153,8 @@ git push origin main v0.3.0      # the tag starts .github/workflows/release.yml
 ```
 
 The workflow checks the tag against the version files, builds the installer and the extension zip on Windows and
-the signed APK on Linux, adds `SHA256SUMS.txt` and build attestations, and creates a **draft** release with the
+the Fedora RPM and the signed APK on Linux, has Mozilla sign the Firefox add-on (repository secrets
+`AMO_JWT_ISSUER` and `AMO_JWT_SECRET`; without them the release has no `.xpi`), adds `SHA256SUMS.txt` and build attestations, and creates a **draft** release with the
 changelog section as its notes. Open the draft on GitHub, check the files, then press **Publish**. The Android
 signing key is stored as the secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` and
 `ANDROID_KEY_ALIAS` of the repository environment `release`; the build fails if the APK is signed with any key
@@ -171,7 +184,7 @@ cd app && bun run build
 end over real TCP. It also covers revocation, wrong pairing codes, sync while
 locked, conflicts, and import/backup.
 
-## Browser extension (Windows: Chrome and Edge)
+## Browser extension (Windows: Chrome and Edge; Fedora: Firefox)
 
 The extension fills logins from your vault and offers to save new ones. It talks to the LocalPass
 app on the same computer through Windows' native-messaging mechanism; nothing goes over a network.
@@ -210,7 +223,30 @@ ES256 algorithm. Security keys, other algorithms and sites a passkey can't be us
 the browser's own dialog. By default Windows Hello confirms each passkey use (Settings → Browser
 extension). The popup has a **Use LocalPass for passkeys** switch.
 
-Not supported in the extension: Firefox. For other apps and browsers on Windows see the next section.
+For Firefox on Fedora see the next subsection; for other apps and browsers on Windows see the section after it.
+
+### Firefox on Fedora Linux
+
+The same extension, built for Firefox, works with the Fedora app. Chrome and Chromium on Linux are not set up.
+
+1. Install the signed `localpass-firefox-<version>.xpi` from the release page: in Firefox open `about:addons`,
+   choose the gear → **Install Add-on From File**, pick the file. (Mozilla signed it as a private add-on; it is
+   not on addons.mozilla.org and Firefox does not update it, so install each new `.xpi` the same way.)
+2. In LocalPass open Settings → Browser extension and choose **Set up**. This writes
+   `~/.mozilla/native-messaging-hosts/app.localpass.host.json`, which lets Firefox start LocalPass as the
+   extension's helper. **Remove** deletes it again.
+3. Click the LocalPass icon in the toolbar and choose **Connect**; approve it in the app after comparing the code.
+
+Firefox cannot prove that a button drawn into a page was visible to you, so LocalPass never lets a page-drawn
+button act. The badge in a login field only opens a **separate LocalPass window** (an extension window that
+the page cannot touch), and that is where you choose a login to fill, say Save or Not now to a new login,
+create a passkey or pick one to sign in with. The window shows the site Firefox reported, never the password,
+and its buttons stay disabled for a moment after it appears or you come back to it, so a key you were
+already pressing cannot choose for you. What Firefox does not get: a menu inside the username field,
+passkey sign-in from that field (Firefox's own flow handles those requests) and the "generate a strong
+password" row. Where Windows asks for Windows Hello, LocalPass on Linux asks for your master password in a
+**Confirm it is you** dialog in the app (searching the whole vault, filling a login saved for another site).
+A brand-new login or passkey is saved without asking, as on Windows; replacing one asks **Replace?** first.
 
 ## Windows passkeys (any app or browser, Windows 11)
 
@@ -371,7 +407,21 @@ notification.
   site on any port; one saved with a port (`https://example.com:8443`) matches
   only that port. Saving a password that would replace one stored for another
   address of the same site asks first (the **Replace?** question).
-- The browser extension's buttons on a page are inactive on pages that put a
+- **Fedora: programs running as you.** As on Windows, LocalPass does not defend itself against other programs
+  running as your Linux user. The key that protects its device files lives in your login keyring (Secret
+  Service); a program that may use your unlocked keyring can read it. If the keyring entry is deleted or the
+  keyring is replaced, LocalPass cannot open its device files and does not make up new ones. The data folder is
+  kept private to your user (mode 0700). The clipboard hint that keeps a copied password out of clipboard
+  history is honoured by KDE's Klipper and similar tools, but GNOME clipboard-history extensions usually ignore it.
+- **Firefox: the badge in a login field is not proof that you saw it.** Firefox cannot tell LocalPass whether a
+  button was visible, so a page that covers the badge with a see-through layer can get your click on it. That click
+  only opens the separate LocalPass window, which shows the site Firefox reported; nothing is filled, saved or
+  created until you click a choice inside that window. A page can also open that window by itself when it asks
+  for a passkey (at most one window per tab and eight in all); Cancel closes it. The Firefox add-on is signed by
+  Mozilla but not published there, and Firefox does not update it: install each new `.xpi` yourself.
+- On Fedora the "Confirm it is you" check is your master password, in a dialog in the app (five wrong tries
+  end that request). It proves that someone knows the master password, not that you are at the screen.
+- The browser extension's buttons on a page (Chrome and Edge) are inactive on pages that put a
   `filter` or `opacity` on the `<html>` element (Dark Reader's filter mode, some
   grayscale sites): Chrome then does not call them plainly visible, and LocalPass
   ignores clicks it cannot be sure you saw. That fails safe, and the toolbar popup

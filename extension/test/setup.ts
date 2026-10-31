@@ -6,6 +6,8 @@ GlobalRegistrator.register();
 
 // The page interface's shadow root is open in tests (as in the e2e build), so they can read it.
 (globalThis as unknown as { __E2E__: boolean }).__E2E__ = true;
+// Unit tests run the Chrome build; the Firefox storage backend is tested through `indexedDbArea` directly.
+(globalThis as unknown as { __FIREFOX__: boolean }).__FIREFOX__ = false;
 
 /**
  * happy-dom has no Intersection Observer v2, which the page interface uses to prove that a click

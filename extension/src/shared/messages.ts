@@ -28,7 +28,49 @@ export type ToBackground =
   | { kind: "passkeysEnabled" }
   | { kind: "passkeyCandidates"; rpId: string; allow: string[] }
   | { kind: "passkeyCreate"; request: PasskeyCreateInput }
-  | { kind: "passkeyAssert"; itemId: string; rpId: string; challenge: string; uv: UserVerification };
+  | { kind: "passkeyAssert"; itemId: string; rpId: string; challenge: string; uv: UserVerification }
+  /**
+   * Firefox only. A content script asks the user to decide in a LocalPass window (see background/decide.ts)
+   * and gets the outcome: `PasskeyCreated`, `PasskeyAssertion`, `LoginFill` or `SaveOutcome`. `ref` names
+   * the request so the page can withdraw it.
+   */
+  | { kind: "decide"; ref: string; request: DecisionRequest }
+  | { kind: "decideCancel"; ref: string }
+  /** Firefox only, from the decision window itself (`id` names the decision). */
+  | { kind: "decisionInfo"; id: string }
+  | { kind: "decisionLogins"; id: string }
+  | { kind: "decisionCandidates"; id: string }
+  | { kind: "decisionAnswer"; id: string; answer: DecisionAnswer };
+
+/** What a content script asks the user to decide. Page text in it is shown only through `displayText`. */
+export type DecisionRequest =
+  | { decision: "passkeyCreate"; request: PasskeyCreateInput }
+  | { decision: "passkeyGet"; rpId: string; allow: string[]; challenge: string; uv: UserVerification }
+  | { decision: "saveLogin"; id: string }
+  | { decision: "chooseLogin" };
+
+/** What the decision window sends back; only the answers that fit the decision are accepted. */
+export type DecisionAnswer =
+  | { action: "create" }
+  | { action: "assert"; itemId: string }
+  | { action: "save" }
+  | { action: "never" }
+  | { action: "fill"; itemId: string }
+  | { action: "fallback" }
+  | { action: "cancel" };
+
+/** What the decision window shows: the site is the one the browser reported for the asking frame. */
+export type DecisionInfo = { origin: string; host: string } & (
+  | { decision: "passkeyCreate"; request: PasskeyCreateInput }
+  | { decision: "passkeyGet"; rpId: string }
+  | { decision: "saveLogin"; username: string }
+  | { decision: "chooseLogin" }
+);
+
+/** The reply to an answer: text to show before the window closes, if any. */
+export interface DecisionDone {
+  message?: string;
+}
 
 export type ToContent =
   /** `origin`: the site the password was fetched for; the page drops the fill if it is not that. */

@@ -108,6 +108,7 @@ export function installChrome(): FakeChrome {
     runtime: {
       id: "khlgdnhadbjfghhonaohnhdmedgnenlc",
       lastError: undefined,
+      getURL: (path: string) => `chrome-extension://khlgdnhadbjfghhonaohnhdmedgnenlc/${path}`,
       connectNative() {
         const port = new FakePort();
         fake.ports.push(port);
@@ -154,4 +155,31 @@ export async function until(ok: () => boolean, ms = 1500, what = "condition") {
     if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`);
     await sleep(5);
   }
+}
+
+/** The window API the Firefox decision window uses. `created` lists the options of every window opened. */
+export function installWindows() {
+  const created: { url: string; windowId: number }[] = [];
+  const removed: number[] = [];
+  const listeners: Array<(windowId: number) => void> = [];
+  let next = 100;
+  (globalThis as unknown as { chrome: { windows: unknown } }).chrome.windows = {
+    async create(options: { url: string }) {
+      const windowId = ++next;
+      created.push({ url: options.url, windowId });
+      return { id: windowId };
+    },
+    async remove(windowId: number) {
+      removed.push(windowId);
+    },
+    onRemoved: { addListener: (f: (windowId: number) => void) => void listeners.push(f) },
+  };
+  return {
+    created,
+    removed,
+    /** The user closes the window. */
+    close(windowId: number) {
+      for (const f of listeners) f(windowId);
+    },
+  };
 }

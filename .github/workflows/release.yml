@@ -64,6 +64,84 @@ jobs:
           path: out/*
           if-no-files-found: error
 
+  linux:
+    name: Fedora RPM
+    needs: check
+    runs-on: ubuntu-latest
+    # Built on the Fedora the package is for, so it links Fedora's WebKitGTK and OpenSSL.
+    container: fedora:44
+    permissions:
+      contents: read
+    steps:
+      - run: dnf install -y git gcc gcc-c++ make rustup unzip openssl-devel webkit2gtk4.1-devel libxdo-devel libayatana-appindicator-gtk3-devel librsvg2-devel patchelf rpm-build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # Fedora's `rustup` package ships only `rustup-init`; `rustup show` then installs what rust-toolchain.toml names.
+      - run: |
+          rustup-init -y --no-modify-path --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: bun install --frozen-lockfile
+        working-directory: extension
+      - run: bun install --frozen-lockfile
+        working-directory: app
+      # beforeBuildCommand runs `build:all` (web app and extension; the provider step skips itself on Linux).
+      - run: bun run tauri build
+        working-directory: app
+      - name: Collect files
+        run: |
+          mkdir out
+          cp target/release/bundle/rpm/*.rpm out/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux
+          path: out/*
+          if-no-files-found: error
+
+  firefox:
+    name: Firefox add-on
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      # web-ext is a pinned dev dependency of the extension (exact version, checked by the lockfile), so the signing
+      # secrets below never meet a package that was not locked.
+      - run: bun install --frozen-lockfile
+        working-directory: extension
+      - run: bun run build --firefox
+        working-directory: extension
+      - run: bun x web-ext lint --source-dir dist-firefox
+        working-directory: extension
+      # Mozilla signs the add-on ("unlisted": it is not published on addons.mozilla.org, the .xpi is installed by hand).
+      # Without the repository secrets AMO_JWT_ISSUER / AMO_JWT_SECRET the release goes out without an add-on.
+      - name: Sign with Mozilla
+        working-directory: extension
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          mkdir -p ../out
+          if [ -z "$WEB_EXT_API_KEY" ] || [ -z "$WEB_EXT_API_SECRET" ]; then
+            echo "::warning::AMO_JWT_ISSUER / AMO_JWT_SECRET are not set: this release has no signed Firefox add-on"
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          bun x web-ext sign --channel unlisted --source-dir dist-firefox --artifacts-dir "$RUNNER_TEMP/signed" --no-input --approval-timeout 1200000
+          cp "$RUNNER_TEMP"/signed/*.xpi "../out/localpass-firefox-${version}.xpi"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: firefox
+          path: out/*
+          if-no-files-found: ignore
+
   android:
     name: Android APK
     needs: check
@@ -130,7 +208,7 @@ jobs:
 
   publish:
     name: Draft release
-    needs: [windows, android]
+    needs: [windows, linux, firefox, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release
@@ -173,8 +251,10 @@ jobs:
           | File | For |
           |---|---|
           | `LocalPass_<version>_x64-setup.exe` | Windows 10/11 (per-user install, not code-signed: SmartScreen says "More info → Run anyway") |
+          | `localpass-<version>-1.x86_64.rpm` | Fedora 44 (`sudo dnf install ./localpass-<version>-1.x86_64.rpm`; not signed, check the SHA-256 line) |
           | `localpass-<version>-universal-release.apk` | Android 7+ (64-bit ARM phones and x86_64 emulators) |
           | `localpass-extension-<version>.zip` | Chrome / Edge extension (Developer mode, "Load unpacked") |
+          | `localpass-firefox-<version>.xpi` | Firefox extension, signed by Mozilla (about:addons → gear → Install Add-on From File) |
           | `SHA256SUMS.txt` | SHA-256 of every file above |
 
           Check a download: `(Get-FileHash <file> -Algorithm SHA256).Hash.ToLower()` must equal its line in `SHA256SUMS.txt`.

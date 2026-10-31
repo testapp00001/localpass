@@ -11,6 +11,7 @@ provider) are done. Phase 5 (hardening and release builds) is in progress: 5.1 (
 5.2 (fixes), 5.3 (security review, `docs/phase5-security-review.md`), 5.4 (README "Security notes and limits") and 5.5 (release builds: `target/dist/0.2.0`, version 0.2.0) are done, only 5.6 (final matrix and report) remains. **Start from `docs/handoff-phase4-5.md`, section
 "RESUME HERE"**: it has the exact next steps, the machine state, the rules for keeping sessions
 small and cheap, and the environment facts. Do not rely on conversation history for state.
+Phase 6 (LocalPass on Fedora Linux + Firefox, `docs/phase6-linux-plan.md`) is in progress on the same tree: its state is `docs/handoff-phase6-linux.md`, section "RESUME HERE" (6.0-6.4 done, 6.5 partly done, 6.6 done incl. the security review `docs/phase6-security-review.md`, 6.7 next; open items are listed in the handoff).
 
 ## Commands
 
@@ -36,6 +37,7 @@ Browser extension (`extension/`, Chrome and Edge, TypeScript built with Bun):
 ```sh
 cd extension && bun install
 bun run build            # extension/dist (also built by `bun run build:all` in app/ before `tauri build`)
+bun run build --firefox  # extension/dist-firefox (manifest derived in manifest-firefox.ts; gecko id read from lp-broker's FIREFOX_EXTENSION_ID); lint: bunx web-ext@8 lint -s dist-firefox
 bun test                 # form-detection tests (happy-dom), the relying party (software authenticator) and the Windows provider test's log/verdict logic
 bunx tsc --noEmit
 # Real browser end to end (Windows, uses installed Chrome/Edge, BROWSER=edge for Edge):
@@ -45,6 +47,9 @@ bun run e2e/passkeys.ts  # passkeys against a local relying party (SimpleWebAuth
 bun run e2e/host.ts      # localpass.exe as the native-messaging helper (pass the release exe path to test the GUI build)
 bun run e2e/windows-provider.ts  # ASSISTED: the real Windows passkey provider checked by a local SimpleWebAuthn relying party in a throwaway Edge profile; needs a person (Windows sheet, Hello), flags --all|--cancel|--locked|--app-closed, `--virtual` is the unattended self-test (notes, "Phase 4.6")
 bun run e2e/windows-passkeys.ts  # Settings > Windows passkeys against a THROWAWAY provider package (LP_APP_EXE, LP_TEST_PROVIDER_EXE built with `-p lp-winauth --features test-identity`; see the script header)
+# Real Firefox (Linux, headless, WebDriver BiDi, throwaway HOME/profile/runtime dir; needs `cargo build -p lp-broker --examples`):
+bun run build --firefox --e2e && bun run e2e/firefox/run.ts   # pairing through the real helper, fill, save, the decision window's guards, passkeys vs SimpleWebAuthn (SLOW=1 adds a 75 s wait)
+bun run e2e/firefox/assisted.ts [profile] [app binary]        # ASSISTED: the REAL app (LOCALPASS_PROFILE=dev2 bun run tauri dev) and a visible Firefox; "Confirm it is you" with the window hidden/open
 # Passkeys checked by an independent relying party (SimpleWebAuthn):
 cargo run -q -p lp-engine --example passkey_fixture > tools/passkey-verify/fixture.json && cd tools/passkey-verify && bun install && bun run verify.ts fixture.json
 ```
@@ -94,6 +99,7 @@ Design points that span several files:
 - **`localpass.exe` is also the native-messaging helper.** When a browser starts it with an extension origin as the first argument, `main.rs` runs `native_host` instead of the app. The browser finds it through HKCU registry keys written by Settings → Browser extension (`native_messaging.rs`). The extension id is fixed by the `key` in `extension/manifest.json`; `lp_broker::nmhost::EXTENSION_ID` must match it.
 
 - **The extension wraps WebAuthn in the page.** `inject.ts` runs in the page's MAIN world and replaces `navigator.credentials.create/get`; it talks to the isolated content script (`content/passkeys.ts`) with `window.postMessage` (checked with `event.source === window`). The content script asks the user (dialog, or the username field's menu for conditional mediation), the service worker adds the origin from `sender`, and the engine signs. Anything LocalPass declines (security keys, other algorithms, no match, switched off in the popup, app unreachable) goes back as `fallback` and the page uses the browser's own flow. `content.js` runs at `document_start` so the bridge exists before the page's scripts: it must not assume the DOM is parsed (rescan in `formOf`, wait for `DOMContentLoaded` before offering a save), and the service worker sleeps when idle, so passkey calls may connect to the app rather than treat "not connected yet" as "unavailable". `e2e/run.ts` and `e2e/passkeys.ts` catch both.
+- **Firefox build (Phase 6.6).** `bun run build --firefox` (manifest from `manifest-firefox.ts`; `__FIREFOX__` is a build-time define, tests flip `globalThis.__FIREFOX__`). Firefox has no IntersectionObserver `isVisible` and no `storage.local.setAccessLevel`, so: the pairing secret and other persistent data live in an IndexedDB area of the extension origin (`background/storage.ts` `local()`; the popup uses it too, nothing else may touch `chrome.storage.local`), and every decision an in-page control makes in Chrome is made in an extension-owned window (`background/decide.ts` + `src/decide/`; the background builds the site from `sender`, the window gets no secrets, `authorize()` checks the window). Details and measurements: `docs/handoff-phase6-linux.md`, 6.6.
 - **Extension trust rules (Phase 5.2).** The service worker reaches `chrome.storage.local` only through `background/storage.ts` `local()`, which first restricts the area to trusted contexts (content scripts can read `storage.local` otherwise: they ask the worker, e.g. `passkeysEnabled`, and never touch `chrome.storage`; `test/storage.test.ts` scans for it). `BrokerClient` trusts a connection only after this connection's challenge and a matching server proof (one `Connection` object per port); anything else closes the port. Whatever a page posts goes through `content/validate.ts` and the limits in `shared/limits.ts` (same numbers as the app) and is shown only through `displayText` and `textContent`; a call over a limit falls back to the browser. `doFill` carries the origin it was fetched for and the page checks it. The popup fetches all logins once per click (`loadLogins`, one Windows Hello prompt) and filters locally; unit tests use the fakes in `extension/test/chrome.ts` and `fakeapp.ts`.
 
 ### Desktop / mobile app (`app/`)

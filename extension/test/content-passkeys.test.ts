@@ -236,3 +236,83 @@ describe("the passkey switch", () => {
     expect(asked.map((m) => m.kind)).toContain("passkeysEnabled");
   });
 });
+
+// ---- Firefox: the decision is made in a LocalPass window, not in the page ----
+
+describe("Firefox build", () => {
+  const flag = globalThis as unknown as { __FIREFOX__: boolean };
+  let decideAnswer: () => Promise<unknown>;
+  beforeEach(() => {
+    flag.__FIREFOX__ = true;
+    decideAnswer = async () => ({ ok: true, data: { credentialId: "from-window" } });
+    const runtime = (globalThis as unknown as { chrome: { runtime: { sendMessage: (m: Json) => Promise<unknown> } } }).chrome.runtime;
+    const before = runtime.sendMessage;
+    runtime.sendMessage = async (message: Json) => (message.kind === "decide" ? (asked.push(message), decideAnswer()) : before(message));
+  });
+  afterEach(() => {
+    flag.__FIREFOX__ = false;
+  });
+
+  const getPayload = (extra: Json = {}) => ({ rpId: "example.com", allow: [], challenge: b64(32), uv: "preferred", conditional: false, ...extra });
+
+  test("a create is decided by the background's window: the page gets no dialog and the result is passed on", async () => {
+    const id = post("create", createPayload());
+    await until(() => !!reply(id));
+    expect(sheet()?.querySelector(".sheet") ?? null).toBeNull();
+    const decide = asked.find((m) => m.kind === "decide")!;
+    expect(decide).toMatchObject({ ref: id, request: { decision: "passkeyCreate", request: { rpId: "example.com", userName: "alice" } } });
+    expect(reply(id)).toMatchObject({ ok: true, result: { credentialId: "from-window" } });
+    expect(asked.some((m) => m.kind === "passkeyCreate")).toBe(false);
+  });
+
+  test("a get goes to the window with only the validated fields", async () => {
+    const id = post("get", getPayload({ extraneous: "x" }));
+    await until(() => !!reply(id));
+    const decide = asked.find((m) => m.kind === "decide")!;
+    expect(decide.request).toEqual({ decision: "passkeyGet", rpId: "example.com", allow: [], challenge: expect.any(String), uv: "preferred" });
+    expect(sheet()?.querySelector(".sheet") ?? null).toBeNull();
+  });
+
+  test.each([
+    ["the user chose another method", "fallback", { fallback: true }],
+    ["the user closed the window", "cancelled", { ok: false, name: "NotAllowedError" }],
+    ["the user said no in the app", "denied", { ok: false, name: "NotAllowedError" }],
+    ["the passkey already exists", "passkeyExists", { ok: false, name: "InvalidStateError" }],
+  ])("when %s the page hears the matching answer", async (_why, code, expected) => {
+    decideAnswer = async () => ({ ok: false, code, message: "x" });
+    const id = post("create", createPayload());
+    await until(() => !!reply(id));
+    expect(reply(id)).toMatchObject(expected);
+  });
+
+  test("a conditional get goes back to the browser at once and is not parked", async () => {
+    const id = post("get", getPayload({ conditional: true }));
+    await until(() => !!reply(id));
+    expect(reply(id)).toMatchObject({ fallback: true });
+    expect(asked.some((m) => m.kind === "decide")).toBe(false);
+    expect(asked.some((m) => m.kind === "passkeyCandidates")).toBe(false);
+  });
+
+  test("withdrawing a request closes its window and the page hears nothing more", async () => {
+    let finishWindow!: (v: unknown) => void;
+    decideAnswer = () => new Promise((r) => (finishWindow = r));
+    const id = post("create", createPayload());
+    await until(() => asked.some((m) => m.kind === "decide"));
+    post("cancel", { target: id });
+    await until(() => asked.some((m) => m.kind === "decideCancel"));
+    expect(asked.find((m) => m.kind === "decideCancel")).toMatchObject({ ref: id });
+    finishWindow({ ok: false, code: "cancelled", message: "x" });
+    await sleep(20);
+    expect(reply(id)).toBeUndefined();
+  });
+
+  test("an app that is not running still hands the call to the browser", async () => {
+    const runtime = (globalThis as unknown as { chrome: { runtime: { sendMessage: (m: Json) => Promise<unknown> } } }).chrome.runtime;
+    const before = runtime.sendMessage;
+    runtime.sendMessage = async (m: Json) => (m.kind === "findLogins" ? { ok: false, code: "appNotRunning", message: "x" } : before(m));
+    const id = post("create", createPayload());
+    await until(() => !!reply(id));
+    expect(reply(id)).toMatchObject({ fallback: true });
+    expect(asked.some((m) => m.kind === "decide")).toBe(false);
+  });
+});

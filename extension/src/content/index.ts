@@ -5,10 +5,14 @@
 import type { FindLoginsReply, PendingSave, ToContent } from "../shared/messages";
 import type { LoginFill, LoginMatch, SaveOutcome } from "../shared/protocol";
 import { MAX_CAPTURE_CHARS } from "../shared/limits";
+import { saveMessage } from "../shared/shown";
 import { ask } from "./ask";
 import { type LoginForm, findLoginForms, setValue } from "./detect";
 import { conditionalCandidates, conditionalPending, installPasskeyBridge, passkeyRow } from "./passkeys";
 import { type MenuRow, hideBadge, hideBar, hideMenu, showBadge, showMenu, showSaveBar } from "./ui";
+
+/** Set by `bun run build --firefox`: there the user chooses and confirms in a LocalPass window, not in the page. */
+declare const __FIREFOX__: boolean;
 
 // Listen for the page's passkey requests from the very start (this script runs at document_start).
 installPasskeyBridge();
@@ -45,6 +49,15 @@ function bestForm(): LoginForm | undefined {
 }
 
 // ---- the badge and menu ----
+
+/** Firefox: the badge opens a LocalPass window; the chosen login comes back here to be filled. */
+async function chooseInWindow(form: LoginForm): Promise<void> {
+  try {
+    applyFill(form, await ask<LoginFill>({ kind: "decide", ref: crypto.randomUUID(), request: { decision: "chooseLogin" } }));
+  } catch {
+    // Cancelled, or the window told the user what is wrong.
+  }
+}
 
 async function openMenu(field: HTMLInputElement, form: LoginForm): Promise<void> {
   let reply: FindLoginsReply;
@@ -123,7 +136,7 @@ function onFocus(field: HTMLInputElement, form: LoginForm): void {
       if (document.activeElement !== field) return;
       const useful = reply.status === "ok" && (reply.logins.length > 0 || form.isNewPassword || conditionalPending());
       // Muted when LocalPass can't help yet (locked or not connected); the click explains why.
-      showBadge(field, !useful, () => void openMenu(field, form));
+      showBadge(field, !useful, () => void (__FIREFOX__ ? chooseInWindow(form) : openMenu(field, form)));
     })
     .catch(() => {});
 }
@@ -208,13 +221,16 @@ async function checkPending(): Promise<void> {
 }
 
 function offerSave(pending: PendingSave): void {
+  if (__FIREFOX__) {
+    void ask({ kind: "decide", ref: crypto.randomUUID(), request: { decision: "saveLogin", id: pending.id } }).catch(() => {});
+    return;
+  }
   showSaveBar({
     origin: pending.origin,
     username: pending.username,
     onSave: async () => {
       const outcome = await ask<SaveOutcome>({ kind: "savePending", id: pending.id });
-      if (outcome.status === "declined") return "You chose not to replace the saved password. Nothing was changed.";
-      return outcome.status === "created" ? "Saved to LocalPass." : outcome.status === "updated" ? "Password updated in LocalPass." : "Already saved.";
+      return saveMessage(outcome);
     },
     onDismiss: (never) => void ask({ kind: "dismissPending", id: pending.id, never }).catch(() => {}),
   });

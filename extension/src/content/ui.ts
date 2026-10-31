@@ -42,6 +42,8 @@ const STYLE = `
 
 /** Set by `bun run build --e2e`: tests need to look inside, so that build leaves the root open. */
 declare const __E2E__: boolean;
+/** Set by `bun run build --firefox`. */
+declare const __FIREFOX__: boolean;
 
 let root: ShadowRoot | null = null;
 let hostElement: HTMLElement | null = null;
@@ -159,6 +161,25 @@ function arm(control: HTMLElement, action: () => void): Armed {
   return state;
 }
 
+/**
+ * Firefox cannot report visibility, so `arm` would keep a control inert forever. The only control
+ * drawn into pages there is the badge, and its click merely asks the background to open a LocalPass
+ * window, where the user decides (see background/decide.ts); a click a script made up is still ignored
+ * and the background allows one such window per tab. Never use this for a control that acts by itself.
+ */
+function armOpener(control: HTMLElement, action: () => void): Armed {
+  const state: Armed = { control, ready: true, timer: undefined, movedAt: 0 };
+  armed.set(control, state);
+  control.toggleAttribute("data-ready", true);
+  control.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (guard.needTrusted && !e.isTrusted) return;
+    action();
+  });
+  return state;
+}
+
 // ---- badge in a field ----
 
 let badge: { button: HTMLButtonElement; anchor: HTMLElement; frame: number } | null = null;
@@ -169,7 +190,7 @@ export function showBadge(anchor: HTMLInputElement, muted: boolean, onClick: () 
   button.type = "button";
   button.title = "LocalPass";
   button.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus in the field
-  const state = arm(button, onClick);
+  const state = __FIREFOX__ ? armOpener(button, onClick) : arm(button, onClick);
   shadow().append(button);
   const place = () => {
     if (!badge) return;

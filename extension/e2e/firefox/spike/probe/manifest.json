@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "LocalPass spike probe",
+  "version": "0.0.1",
+  "browser_specific_settings": { "gecko": { "id": "probe@localpass.test", "strict_min_version": "128.0" } },
+  "permissions": ["storage", "privacy", "nativeMessaging", "activeTab"],
+  "background": { "scripts": ["background.js"], "type": "module" },
+  "content_scripts": [
+    { "matches": ["http://localhost/*"], "js": ["iso.js"], "all_frames": true, "match_about_blank": false, "run_at": "document_start" },
+    { "matches": ["http://localhost/*"], "js": ["main.js"], "all_frames": true, "match_about_blank": false, "run_at": "document_start", "world": "MAIN" }
+  ]
+}

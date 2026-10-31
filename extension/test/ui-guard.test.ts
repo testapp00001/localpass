@@ -186,3 +186,44 @@ describe("a browser without visibility tracking", () => {
     }
   });
 });
+
+describe("Firefox: the badge only opens LocalPass's own window", () => {
+  const flag = globalThis as unknown as { __FIREFOX__: boolean; IntersectionObserver: unknown };
+  beforeEach(() => {
+    flag.__FIREFOX__ = true;
+    // Firefox reports no visibility at all.
+    flag.IntersectionObserver = undefined;
+  });
+  afterEach(() => {
+    flag.__FIREFOX__ = false;
+  });
+
+  test("a real click works without any visibility report, a made-up one does not", async () => {
+    const fresh = await import(`../src/content/ui.ts?firefoxBadge=${Date.now()}`);
+    fresh.guard.holdMs = 0;
+    fresh.guard.needTrusted = true;
+    let opened = 0;
+    fresh.showBadge(field(), false, () => opened++);
+    const host = [...document.documentElement.children].filter((e) => e.shadowRoot).at(-1)!;
+    const badge = host.shadowRoot!.querySelector(".badge") as HTMLButtonElement;
+    expect(badge.hasAttribute("data-ready")).toBe(true);
+    badge.click(); // not trusted (a script's click)
+    expect(opened).toBe(0);
+    fresh.guard.needTrusted = false; // happy-dom cannot make trusted clicks
+    badge.click();
+    expect(opened).toBe(1);
+    fresh.hideBadge();
+  });
+
+  test("menus and sheets stay inert (nothing in the page acts without a visible-click proof)", async () => {
+    const fresh = await import(`../src/content/ui.ts?firefoxMenu=${Date.now()}`);
+    fresh.guard.holdMs = 0;
+    fresh.guard.needTrusted = false;
+    let picked = 0;
+    fresh.showMenu(field(), { title: "t", rows: [{ label: "x", onSelect: () => picked++ }] });
+    const host = [...document.documentElement.children].filter((e) => e.shadowRoot).at(-1)!;
+    (host.shadowRoot!.querySelector(".row") as HTMLButtonElement).click();
+    expect(picked).toBe(0);
+    fresh.hideMenu();
+  });
+});

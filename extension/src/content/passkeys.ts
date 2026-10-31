@@ -4,11 +4,15 @@
 // can't or shouldn't handle a call, it says so and the page falls back to the browser's own flow.
 
 import { displayText } from "../shared/limits";
-import type { PasskeyAssertion, PasskeyCreateInput, PasskeyCreated } from "../shared/messages";
+import type { DecisionRequest, PasskeyAssertion, PasskeyCreateInput, PasskeyCreated } from "../shared/messages";
 import { BrokerError, type PasskeyCandidate } from "../shared/protocol";
+import { createDialogLines, describePasskey as describe } from "../shared/shown";
 import { ask } from "./ask";
 import { type Sheet, showSheet } from "./ui";
 import { type GetInput, checkCreate, checkGet } from "./validate";
+
+/** Set by `bun run build --firefox`: there the user decides in a LocalPass window, not in the page. */
+declare const __FIREFOX__: boolean;
 
 /** What the page posted: nothing in it is trusted until `validate.ts` has checked it. */
 interface PageRequest {
@@ -48,17 +52,6 @@ function failure(e: unknown): Refusal {
   return { ok: false, name, message };
 }
 
-/** Every passkey row names the site (its id, as the app verified it) before anything the page called it. */
-function describe(c: PasskeyCandidate): { label: string; sub: string } {
-  const site = displayText(c.rpId);
-  const name = displayText(c.rpName);
-  const named = name && name.toLowerCase() !== site.toLowerCase() ? ` (${name})` : "";
-  return {
-    label: displayText(c.userName || c.userDisplayName) || "Passkey",
-    sub: `${site}${named}${c.createdMs ? ` · ${new Date(c.createdMs).toLocaleDateString()}` : ""}`,
-  };
-}
-
 /**
  * The popup's "use LocalPass for passkeys" switch (on unless the user turned it off). Content
  * scripts cannot read the extension's storage, so the service worker answers.
@@ -88,25 +81,24 @@ async function usable(): Promise<boolean> {
 
 // ---- create ----
 
+export { createDialogLines };
+
 /**
- * What the create dialog says. The first line is the relying party id the call is for (it was
- * checked against this page's address), never the name the page gave itself; page text is
- * cleaned, shortened and only ever shown as text.
+ * Firefox: the background opens a LocalPass window, the user decides there, and the outcome comes back
+ * as the reply (see background/decide.ts). Nothing is drawn into the page.
  */
-export function createDialogLines(p: PasskeyCreateInput, host: string): string[] {
-  const rpId = displayText(p.rpId || host, 253);
-  const lines = [rpId];
-  const account = displayText(p.userName);
-  const display = displayText(p.userDisplayName);
-  if (account) lines.push(`Account: ${account}${display && display !== account ? ` (${display})` : ""}`);
-  const name = displayText(p.rpName);
-  if (name && name.toLowerCase() !== rpId.toLowerCase()) lines.push(`The site calls itself "${name}"`);
-  lines.push("The passkey is saved in your LocalPass vault and syncs to your other devices.");
-  return lines;
+async function viaWindow(id: string, request: DecisionRequest) {
+  open.set(id, {});
+  try {
+    finish(id, { ok: true, result: await ask<PasskeyCreated | PasskeyAssertion>({ kind: "decide", ref: id, request }) });
+  } catch (e) {
+    finish(id, e instanceof BrokerError && e.code === "fallback" ? { fallback: true } : failure(e));
+  }
 }
 
 async function startCreate(id: string, p: PasskeyCreateInput) {
   if (!(await usable())) return post(id, { fallback: true });
+  if (__FIREFOX__) return viaWindow(id, { decision: "passkeyCreate", request: p });
   const cancelled: Refusal = { ok: false, name: "NotAllowedError", message: "The user cancelled the request." };
   const sheet = showSheet("Create a passkey?", () => finish(id, cancelled));
   open.set(id, { sheet });
@@ -148,8 +140,12 @@ async function sign(id: string, p: GetInput, candidate: PasskeyCandidate) {
 
 async function startGet(id: string, p: GetInput) {
   if (!(await enabled())) return post(id, { fallback: true });
+  // Firefox has no menu in the page: a conditional request is left to the browser at once (parking it
+  // would leave the page waiting for a menu that never comes).
+  if (__FIREFOX__ && p.conditional) return post(id, { fallback: true });
   if (p.conditional) return startConditional(id, p);
   if (!(await usable())) return post(id, { fallback: true });
+  if (__FIREFOX__) return viaWindow(id, { decision: "passkeyGet", rpId: p.rpId, allow: p.allow, challenge: p.challenge, uv: p.uv });
   const cancelled: Refusal = { ok: false, name: "NotAllowedError", message: "The user cancelled the request." };
   const sheet = showSheet("Sign in with a passkey", () => finish(id, cancelled));
   open.set(id, { sheet });
@@ -263,6 +259,7 @@ export function installPasskeyBridge() {
       const target = (data.payload as { target?: unknown } | null)?.target;
       if (typeof target !== "string") return;
       open.get(target)?.sheet?.close();
+      if (__FIREFOX__ && open.has(target)) void ask({ kind: "decideCancel", ref: target }).catch(() => {});
       open.delete(target);
       if (conditional?.id === target) conditional = null;
     }

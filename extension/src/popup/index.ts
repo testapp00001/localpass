@@ -1,7 +1,12 @@
 // The toolbar popup: connect to the app, unlock, and fill the page you are on.
 
 import type { ItemSummary, PopupState, PrivacyState, Reply, ToBackground } from "../shared/messages";
+import { local } from "../background/storage";
 import { BrokerError, type LoginMatch } from "../shared/protocol";
+
+/** Set by `bun run build --firefox` (Linux): the app confirms with the master password there, not Windows Hello. */
+declare const __FIREFOX__: boolean;
+const CONFIRM = __FIREFOX__ ? "your master password" : "Windows Hello";
 
 const main = document.getElementById("main") as HTMLElement;
 const site = document.getElementById("site") as HTMLElement;
@@ -55,7 +60,7 @@ function loginRow(login: { id: string; title: string; username: string }, state:
   const status = h("span", { class: "muted" });
   const fillIt = async () => {
     status.textContent = "";
-    if (force && !confirm(`"${login.title}" was saved for a different website than ${state.tab?.host ?? "this page"}.\n\nLocalPass will ask for Windows Hello before it fills this login here. Continue?`)) return;
+    if (force && !confirm(`"${login.title}" was saved for a different website than ${state.tab?.host ?? "this page"}.\n\nLocalPass will ask for ${CONFIRM} before it fills this login here. Continue?`)) return;
     try {
       await ask({ kind: "fillTab", tabId: state.tab!.id, itemId: login.id, force });
       window.close();
@@ -106,7 +111,7 @@ function searchSection(state: PopupState): HTMLElement {
 
   const load = button("Show all my logins", async () => {
     note.className = "muted";
-    note.textContent = "Waiting for Windows Hello in LocalPass…";
+    note.textContent = `Waiting for ${CONFIRM} in LocalPass…`;
     try {
       showList(await ask<ItemSummary[]>({ kind: "loadLogins" }));
     } catch (e) {
@@ -118,7 +123,7 @@ function searchSection(state: PopupState): HTMLElement {
       }
     }
   });
-  note.textContent = "To fill a login saved for another site, LocalPass asks for Windows Hello once when you list your logins, and again before it fills one.";
+  note.textContent = `To fill a login saved for another site, LocalPass asks for ${CONFIRM} once when you list your logins, and again before it fills one.`;
   box.append(note, load, results);
   // The popup closes while Windows Hello has the focus: the list asked for a moment ago is kept.
   void ask<ItemSummary[] | null>({ kind: "cachedLogins" })
@@ -235,11 +240,12 @@ privacyBox.addEventListener("change", async () => {
 // ---- passkeys ----
 
 async function loadPasskeys() {
-  const stored = await chrome.storage.local.get("passkeysEnabled");
+  // Through local(): in Firefox this setting lives in the extension's IndexedDB, not in storage.local.
+  const stored = await (await local()).get("passkeysEnabled");
   passkeysBox.checked = stored.passkeysEnabled !== false;
 }
 
-passkeysBox.addEventListener("change", () => void chrome.storage.local.set({ passkeysEnabled: passkeysBox.checked }));
+passkeysBox.addEventListener("change", () => void local().then((area) => area.set({ passkeysEnabled: passkeysBox.checked })));
 
 chrome.runtime.onMessage.addListener((m: { kind?: string }) => {
   if (m.kind === "brokerState") void refresh();

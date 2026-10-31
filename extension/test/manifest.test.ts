@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { FIREFOX_MIN_VERSION, firefoxManifest } from "../manifest-firefox";
 
 const root = join(import.meta.dir, "..");
 const manifest = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8")) as Record<string, unknown>;
@@ -41,5 +42,38 @@ describe("identity", () => {
 
   test("the version equals the package version", () => {
     expect(manifest.version).toBe((JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string }).version);
+  });
+});
+
+describe("the Firefox manifest", () => {
+  // The id is read from the Rust constant the app's native-messaging registration allows, so the two cannot drift.
+  const rust = readFileSync(join(root, "../crates/lp-broker/src/nmhost.rs"), "utf8");
+  const geckoId = /FIREFOX_EXTENSION_ID: &str = "([^"]+)"/.exec(rust)?.[1] ?? "";
+  const ff = firefoxManifest(manifest, geckoId) as Record<string, any>;
+
+  test("its add-on id is the app's FIREFOX_EXTENSION_ID", () => {
+    expect(geckoId).toMatch(/^[a-z0-9._-]+@[a-z0-9.-]+$/);
+    expect(ff.browser_specific_settings.gecko.id).toBe(geckoId);
+    expect(ff.browser_specific_settings.gecko.strict_min_version).toBe(FIREFOX_MIN_VERSION);
+  });
+
+  test("an event page instead of a service worker, no Chrome key or minimum version", () => {
+    expect(ff.background).toEqual({ scripts: ["background.js"], type: "module" });
+    for (const key of ["key", "minimum_chrome_version"]) expect(ff[key]).toBeUndefined();
+  });
+
+  test("the same permissions, scripts and (absent) host permissions as the Chrome manifest", () => {
+    expect(ff.permissions).toEqual(manifest.permissions);
+    expect(ff.content_scripts).toEqual(manifest.content_scripts);
+    for (const key of ["host_permissions", "optional_host_permissions", "externally_connectable", "web_accessible_resources"]) expect(ff[key]).toBeUndefined();
+  });
+
+  test("it says LocalPass collects no data", () => {
+    expect(ff.browser_specific_settings.gecko.data_collection_permissions).toEqual({ required: ["none"] });
+  });
+
+  test("the Chrome manifest is untouched by the derivation", () => {
+    expect((manifest.background as { service_worker: string }).service_worker).toBe("background.js");
+    expect(manifest.key).toBeTruthy();
   });
 });

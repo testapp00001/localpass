@@ -20,8 +20,12 @@ import type {
 } from "../shared/messages";
 import { BrokerError, type ItemSummary, type LoginFill, type LoginMatch, type SaveOutcome, type VaultStatus } from "../shared/protocol";
 import { BrokerClient } from "./broker";
+import { Decisions } from "./decide";
 import * as passkeys from "./passkeys";
 import { local } from "./storage";
+
+/** Set by `bun run build --firefox`: there the decisions are made in an extension window (see decide.ts). */
+declare const __FIREFOX__: boolean;
 
 // Content scripts can read storage.local unless it is restricted: do it the moment the worker
 // starts (every later read and write waits for it, see storage.ts).
@@ -43,6 +47,8 @@ interface Pending extends PendingSave {
   password: string;
   tabId: number;
   at: number;
+  /** Firefox: the save window was opened for this capture already (it is not reopened on every page load). */
+  offered?: boolean;
 }
 
 // ---- who is asking ----
@@ -71,7 +77,8 @@ function frameOrigin(sender: chrome.runtime.MessageSender): string {
 }
 
 function fromContentScript(sender: chrome.runtime.MessageSender): sender is chrome.runtime.MessageSender & { tab: chrome.tabs.Tab } {
-  return !!sender.tab && sender.id === chrome.runtime.id && !sender.url?.startsWith("chrome-extension://");
+  // The extension's own pages (popup, decision window) are chrome-extension:// or moz-extension://.
+  return !!sender.tab && sender.id === chrome.runtime.id && !sender.url?.startsWith(chrome.runtime.getURL(""));
 }
 
 // ---- helpers ----
@@ -98,7 +105,10 @@ async function neverSave(): Promise<string[]> {
 // ---- handlers ----
 
 async function findLogins(sender: chrome.runtime.MessageSender, interactive: boolean): Promise<FindLoginsReply> {
-  const origin = frameOrigin(sender);
+  return findLoginsFor(frameOrigin(sender), interactive);
+}
+
+async function findLoginsFor(origin: string, interactive: boolean): Promise<FindLoginsReply> {
   if (broker.state.phase !== "ready" && !interactive) return { status: "offline", logins: [] };
   try {
     const logins = await request<LoginMatch[]>("findLogins", { origin });
@@ -163,12 +173,27 @@ async function pendingFor(tabId: number): Promise<Pending | null> {
 async function pendingSave(sender: chrome.runtime.MessageSender): Promise<PendingSave | null> {
   if (!fromContentScript(sender) || sender.tab.id === undefined || sender.frameId !== 0) return null;
   const pending = await pendingFor(sender.tab.id);
-  return pending ? { id: pending.id, origin: pending.origin, username: pending.username } : null;
+  if (!pending) return null;
+  if (__FIREFOX__) {
+    // A window, not a bar: ask once per capture, or every page load would raise it again.
+    if (pending.offered) return null;
+    await chrome.storage.session.set({ [`pending:${sender.tab.id}`]: { ...pending, offered: true } });
+  }
+  return { id: pending.id, origin: pending.origin, username: pending.username };
+}
+
+async function pendingInfo(tabId: number, id: string): Promise<PendingSave | null> {
+  const pending = await pendingFor(tabId);
+  return pending && pending.id === id ? { id: pending.id, origin: pending.origin, username: pending.username } : null;
 }
 
 async function savePending(sender: chrome.runtime.MessageSender, id: string): Promise<SaveOutcome> {
   if (!fromContentScript(sender) || sender.tab.id === undefined) throw new BrokerError("forbidden", "not from a page");
-  const pending = await pendingFor(sender.tab.id);
+  return savePendingFor(sender.tab.id, id);
+}
+
+async function savePendingFor(tabId: number, id: string): Promise<SaveOutcome> {
+  const pending = await pendingFor(tabId);
   if (!pending || pending.id !== id) throw new BrokerError("notFound", "there is nothing to save any more");
   let outcome: SaveOutcome;
   try {
@@ -177,19 +202,23 @@ async function savePending(sender: chrome.runtime.MessageSender, id: string): Pr
     // The user said no to "Replace what is saved?" in the app: that is the answer, so the captured
     // password is dropped and nothing asks again or saves by another route.
     if (!(e instanceof BrokerError && e.code === "denied")) throw e;
-    await chrome.storage.session.remove(`pending:${sender.tab.id}`);
+    await chrome.storage.session.remove(`pending:${tabId}`);
     return { id: pending.id, status: "declined" };
   }
-  await chrome.storage.session.remove(`pending:${sender.tab.id}`);
+  await chrome.storage.session.remove(`pending:${tabId}`);
   return outcome;
 }
 
 async function dismissPending(sender: chrome.runtime.MessageSender, id: string, never: boolean) {
   if (!fromContentScript(sender) || sender.tab.id === undefined) return;
-  const pending = await pendingFor(sender.tab.id);
+  return dismissPendingFor(sender.tab.id, id, never);
+}
+
+async function dismissPendingFor(tabId: number, id: string, never: boolean) {
+  const pending = await pendingFor(tabId);
   if (!pending || pending.id !== id) return;
   if (never) await (await local()).set({ neverSave: [...new Set([...(await neverSave()), pending.origin])] });
-  await chrome.storage.session.remove(`pending:${sender.tab.id}`);
+  await chrome.storage.session.remove(`pending:${tabId}`);
 }
 
 async function popupState(): Promise<PopupState> {
@@ -272,6 +301,21 @@ async function setPrivacy(disable: boolean): Promise<PrivacyState> {
   return privacy();
 }
 
+const decisions = new Decisions({
+  request,
+  findLogins: (origin) => findLoginsFor(origin, true),
+  rememberFill,
+  pendingInfo,
+  savePending: savePendingFor,
+  dismissPending: dismissPendingFor,
+});
+
+/** The frame a Firefox decision is for. Chrome never uses decisions: its in-page controls decide. */
+function asker(sender: chrome.runtime.MessageSender, fromPage: boolean) {
+  if (!__FIREFOX__ || !fromPage || sender.tab?.id === undefined) throw new BrokerError("forbidden", "not available here");
+  return { tabId: sender.tab.id, frameId: sender.frameId ?? 0, origin: frameOrigin(sender) };
+}
+
 async function handle(message: ToBackground, sender: chrome.runtime.MessageSender): Promise<unknown> {
   if (sender.id !== chrome.runtime.id) throw new BrokerError("forbidden", "unknown sender");
   const fromPage = fromContentScript(sender);
@@ -300,6 +344,18 @@ async function handle(message: ToBackground, sender: chrome.runtime.MessageSende
     case "passkeyAssert":
       if (!fromPage) throw new BrokerError("forbidden", "passkeys are only used for pages");
       return passkeys.assert(request, frameOrigin(sender), message.itemId, message.rpId, message.challenge, message.uv);
+    case "decide":
+      return decisions.open(asker(sender, fromPage), message.ref, message.request);
+    case "decideCancel":
+      return decisions.withdraw(asker(sender, fromPage), message.ref);
+    case "decisionInfo":
+      return decisions.info(sender, message.id);
+    case "decisionLogins":
+      return decisions.logins(sender, message.id);
+    case "decisionCandidates":
+      return decisions.candidates(sender, message.id);
+    case "decisionAnswer":
+      return decisions.answer(sender, message.id, message.answer);
     case "unlock":
       return request("unlock");
     case "state":
@@ -346,4 +402,12 @@ chrome.runtime.onMessage.addListener((message: ToBackground | { kind: "brokerSta
 chrome.runtime.onStartup.addListener(() => void broker.connect().catch(() => {}));
 chrome.runtime.onInstalled.addListener(() => void broker.connect().catch(() => {}));
 // A pending sign-in capture belongs to its tab.
-chrome.tabs.onRemoved.addListener((tabId) => void chrome.storage.session.remove([`pending:${tabId}`, `filled:${tabId}`]));
+chrome.tabs.onRemoved.addListener((tabId) => {
+  decisions.onTabRemoved(tabId);
+  void chrome.storage.session.remove([`pending:${tabId}`, `filled:${tabId}`]);
+});
+if (__FIREFOX__) {
+  chrome.windows.onRemoved.addListener((windowId) => decisions.onWindowRemoved(windowId));
+  // The decision window keeps a port open: it keeps the event page alive while the user decides.
+  chrome.runtime.onConnect.addListener((port) => void decisions.attach(port));
+}

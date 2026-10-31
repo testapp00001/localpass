@@ -68,6 +68,7 @@ interface Connection {
 
 function browserName(): string {
   const ua = navigator.userAgent;
+  if (ua.includes("Firefox/")) return "Firefox extension";
   if (ua.includes("Edg/")) return "Microsoft Edge extension";
   if (ua.includes("OPR/")) return "Opera extension";
   if (ua.includes("Brave")) return "Brave extension";
