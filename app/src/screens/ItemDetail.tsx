@@ -252,11 +252,26 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
             {f.hidden ? secret(`f-${f.id}`, f.value) : f.value}
           </Row>
         ))}
-        {item.notes && (
-          <Row label="Notes">
-            <p className="whitespace-pre-wrap">{item.notes}</p>
-          </Row>
-        )}
+        {item.notes &&
+          (item.kind === "note" ? (
+            <Row
+              label="Notes"
+              actions={
+                <>
+                  <IconButton label={shown.notes ? "Hide note" : "Show note"} onClick={() => toggle("notes")}>
+                    {shown.notes ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </IconButton>
+                  {copyButton("notes", "Note")}
+                </>
+              }
+            >
+              {shown.notes ? <p className="whitespace-pre-wrap">{item.notes}</p> : <span className="secret text-slate-400">••••••••••••</span>}
+            </Row>
+          ) : (
+            <Row label="Notes">
+              <p className="whitespace-pre-wrap">{item.notes}</p>
+            </Row>
+          ))}
         {!item.username && !item.password && !item.notes && !item.urls.length && !item.card && !item.passkey && !item.custom.length && (
           <p className="py-6 text-center text-sm text-slate-500">No details yet.</p>
         )}

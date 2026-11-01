@@ -54,6 +54,12 @@ body {
   letter-spacing: 0.02em;
 }
 
+/* A masked multi-line field (secure note body). WebView2, WebKitGTK and Android WebView all support it. */
+.mask-text {
+  -webkit-text-security: disc;
+  text-security: disc;
+}
+
 ::selection {
   @apply bg-indigo-200 dark:bg-indigo-800;
 }

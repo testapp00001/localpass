@@ -129,6 +129,36 @@ export function TextArea({ label, className = "", ...rest }: React.TextareaHTMLA
   );
 }
 
+/** A multi-line field that hides its text until Show is pressed, like PasswordInput (secure note bodies). */
+export function SecretTextArea({ label, className = "", ...rest }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { label?: string }) {
+  const id = useId();
+  const [shown, setShown] = useState(false);
+  const area = (
+    <div className="relative">
+      <textarea
+        id={id}
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        {...rest}
+        className={`${inputClass} min-h-24 pr-12 ${shown ? "" : "mask-text"} ${className}`}
+      />
+      <div className="absolute right-1 top-1">
+        <IconButton type="button" label={shown ? "Hide" : "Show"} onClick={() => setShown((s) => !s)} className="size-8">
+          {shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        </IconButton>
+      </div>
+    </div>
+  );
+  return label ? (
+    <Field label={label} htmlFor={id}>
+      {area}
+    </Field>
+  ) : (
+    area
+  );
+}
+
 export function Select({ label, children, className = "", ...rest }: React.SelectHTMLAttributes<HTMLSelectElement> & { label?: string }) {
   const id = useId();
   const select = (

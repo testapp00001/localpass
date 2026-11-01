@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { CreditCard, KeyRound, Plus, ScanLine, StickyNote, Trash2, Wand2, X } from "lucide-react";
 import { api, emptyItem, errorText, type FolderView, type ItemInput, type ItemKind } from "../lib/api";
-import { Button, ErrorText, IconButton, PasswordInput, Select, TextArea, TextInput, Toggle } from "../components/ui";
+import { Button, ErrorText, IconButton, PasswordInput, SecretTextArea, Select, TextArea, TextInput, Toggle } from "../components/ui";
 import { PasswordGenerator } from "../components/PasswordGenerator";
 import { canScan, scanQr } from "../lib/scan";
 
@@ -187,7 +187,11 @@ export function ItemEditor({
           </div>
         )}
 
-        <TextArea label="Notes" value={item.notes} onChange={(e) => set({ notes: e.target.value })} rows={item.kind === "note" ? 8 : 3} />
+        {item.kind === "note" ? (
+          <SecretTextArea label="Notes" value={item.notes} onChange={(e) => set({ notes: e.target.value })} rows={8} />
+        ) : (
+          <TextArea label="Notes" value={item.notes} onChange={(e) => set({ notes: e.target.value })} rows={3} />
+        )}
 
         <div className="space-y-2">
           <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Custom fields</label>
