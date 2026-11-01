@@ -128,6 +128,6 @@ Design points that span several files:
 
 - Rust edition 2024, `rustfmt.toml` max width 100, clippy `-D warnings`. Dependencies are declared once in the root `[workspace.dependencies]`.
 - `[profile.dev.package."*"] opt-level = 2` keeps Argon2 and Noise usable in debug builds. Dependencies also build without debug info (`debug = false`): our own crates keep line numbers, and incremental/test builds link several times faster.
-- Linker: on Linux rustc already links with rust-lld (check with `readelf -p .comment target/debug/localpass`); mold and thin LTO were measured in Phase 7.1 and gave too little, so neither is configured (numbers in `docs/handoff-phase7.md`). Windows still links with MSVC's `link.exe`.
+- Linker: on Linux rustc already links with rust-lld (check with `readelf -p .comment target/debug/localpass`); mold and thin LTO were measured in Phase 7.1 and gave too little, so neither is configured (numbers in `docs/handoff-phase7.md`). Windows links with `rust-lld.exe` (`.cargo/config.toml`, checked on Windows in Phase 7.1); drop that block if a Windows link ever fails with a `link.exe`-only flag.
 - Scenario tests bind `127.0.0.1` with mDNS off, so they need no network access.
 - Use `encoding="utf-8"` when editing files from Python on Windows.
