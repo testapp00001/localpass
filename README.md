@@ -260,6 +260,9 @@ Mode** on (Settings → System → For developers; LocalPass is not signed with 
 Windows only installs the provider in that mode, and the settings page tells you when it is off) and
 Windows Hello.
 
+Do the set-up at the PC itself. Over Remote Desktop, Windows answered "not supported" (0x80090029) when LocalPass
+tried to add itself; the same steps worked once done at the keyboard.
+
 **Set up:** in LocalPass open Settings → **Windows passkeys** and follow the one button at a time:
 
 1. **Set up** adds LocalPass to Windows' list of passkey providers (switched off).

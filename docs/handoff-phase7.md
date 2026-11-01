@@ -32,7 +32,7 @@ other subdomains stay separate unless the option is on.
   copy), `CLAUDE.md` ("Current work", "Working with agents", "Plan history"), the agent lines in `docs/handoff-phase4-5.md` and `docs/handoff-phase6-linux.md`, Phase 6
   closed in its handoff, this file, two feedback memories. Deviation from the plan text: the old agent line in the Phase 6 plan file was left as it was and a dated
   "Changes (2026-10-31)" section was appended instead, because the plan's own rule forbids rewriting an approved plan.
-- [x] 7.1 Faster Rust builds (2026-10-31): branch applied, linker and LTO decided, numbers below. The user confirmed mold is not wanted and **skipped the Windows `rust-lld.exe` change: the user will check it later** (not applied; steps below).
+- [x] 7.1 Faster Rust builds (2026-10-31): branch applied, linker and LTO decided, numbers below. The user confirmed mold is not wanted and the Windows `rust-lld.exe` change was skipped at first and **checked by the user on Windows on 2026-11-01 ("work"), so it is now in `.cargo/config.toml`** (details below).
 - [x] 7.2 Firefox decision window: Esc and click outside (2026-10-31, code and automated checks done; **the user confirmed on 2026-11-01 on GNOME that Esc and a click outside close the window**, tested with `extension/dist-firefox` loaded as a temporary add-on in their real Firefox; see the note at the end of this entry).
   `extension/src/decide/index.ts`: each view's way out is the button flagged `dismiss` (Cancel, Close, Not now; the two "request is gone" Close buttons are now `safe` too); Esc
   (plain key only: not a repeat, not during IME composition, no Ctrl/Alt/Meta/Shift) takes it at once, even during the 600 ms hold, and only once (`dismissed` latch). A blur closes the window only for
@@ -57,7 +57,7 @@ other subdomains stay separate unless the option is on.
   guard against shoulder-surfing, not a Rust-side secret like passwords in lists). The app has no component-test setup and none was added for this.
   Not run: the visual pass. Assisted: in `tauri dev` make a secure note with two lines; the detail shows dots, Show reveals the text with its line breaks, Hide and switching to another item hide it again,
   Copy puts the note on the clipboard and toasts "Note copied · clears in Ns"; in Edit the body is dots, Show reveals it, typing and Enter in the masked box work, Save keeps the text.
-- [x] 7.4 2FA QR on desktop (2026-11-01, code and automated checks done; **the user ran their assisted passes on 2026-11-01 and reported "all work"** without naming items, so the Windows-only items (4) and the per-item results below are not individually recorded; the Windows `from_screen` is still only compile-checked unless the user says they ran it).
+- [x] 7.4 2FA QR on desktop (2026-11-01, code and automated checks done; **the user ran their assisted passes on 2026-11-01 and reported "all work"** without naming items; on Windows the user later reported that **the QR functions work** (paste, and "Scan QR on screen" counted in that; per-item results were not given, e.g. whether the two-monitor case was tried)).
   Rust, `app/src-tauri` (desktop only: `#[cfg(desktop)]`, the deps sit in the non-Android target section, so the APK gets none of it):
   - `src/qr.rs`: `from_rgba` / `from_gray` / `from_file` -> `Found { uri, issuer, account }` (`Debug` hides the link) or a `QrError` with the user-facing text (no code, not a 2FA code,
     `otpauth-migration://`, HOTP / bad secret via `TotpSpec::parse`, too big, wrong file type). `rqrr` 0.11 on a grayscale copy (transparent pixels count as white). Limits: file 20 MB (read through
@@ -79,8 +79,8 @@ other subdomains stay separate unless the option is on.
   small code in a 1920x1080 picture; transparent background; two codes where the first is not 2FA; every error; size and type limits; the portal URI parser), the alpha test mutation-checked (alpha ignored ->
   both alpha tests fail). One `#[ignore]` assisted test, `cargo test -p localpass --lib -- --ignored picture_another_program` (`wl-copy` puts a PNG on the clipboard like GNOME's screenshot tool, then read,
   decode, clear, and `wl-paste --list-types` must show no image): passes here. It replaces the clipboard.
-  **Windows is compile-checked only**: `from_screen` was built alone against `windows` 0.62 for `x86_64-pc-windows-gnu` (the app crate itself needs a MinGW C compiler for a dependency, so a
-  full cross check was not possible); it has never run. Android is untouched (CI's Android job still has to build it).
+  **Windows: the user reported on 2026-11-01 that the QR functions work there** (before that it was compile-checked only): `from_screen` was built alone against `windows` 0.62 for `x86_64-pc-windows-gnu` (the app crate itself needs a MinGW C compiler for a dependency, so a
+  full cross check was not possible); it had never run before that report. Android is untouched (CI's Android job still has to build it).
   Not run (assisted, all in `LOCALPASS_PROFILE=dev bun run tauri dev`, new login, 2FA block): (1) Firefox screenshot "Copy" then Ctrl+V in the field and the Paste QR image button; GNOME PrtSc
   to clipboard (Ctrl+PrtSc / the screenshot UI's copy), also while the window is hidden or another window has focus; the clipboard is empty afterwards ("Nothing is copied" in `wl-paste`) and a text
   key pasted with Ctrl+V still works; (2) "Scan QR on screen" with a QR visible in Firefox: the window steps aside, GNOME's picker appears, a selection fills the field, the window returns with focus, and
@@ -112,7 +112,7 @@ Decisions:
 - **Release profile unchanged.** Thin LTO (`CARGO_PROFILE_RELEASE_LTO=thin`, codegen-units 1 kept): 410.3 s (16% faster; the bar was a third) and a 22,038,040 B exe (+5.8%). Fat LTO stays.
   The branch's removal of `staticlib` did not shorten the release build at all (490.6 vs 491.1 s); its gain is disk (2.0 -> 1.7 GB release, 3.5 -> 2.1 GB debug) and the incremental/test builds above.
 - **Android:** nothing to change for the linker (the NDK links with lld). Not run here: `cargo clippy -p localpass --target aarch64-linux-android` (no NDK). The branch changes the library's `crate-type` to `["cdylib", "rlib"]`, so CI's Android job is the check.
-- **Windows (OPEN):** `[target.x86_64-pc-windows-msvc] linker = "rust-lld.exe"` is NOT applied. Nothing in the repo passes link.exe-only flags (no `rustc-link-arg` in our build scripts), but `tauri-build` adds the manifest and icon
+- **Windows (DONE 2026-11-01, applied in `.cargo/config.toml`; the user reported that it works):** `[target.x86_64-pc-windows-msvc] linker = "rust-lld.exe"`. Not reported in detail: whether the exe icon and manifest were looked at one by one, and no timing was taken. What was open before: Nothing in the repo passes link.exe-only flags (no `rustc-link-arg` in our build scripts), but `tauri-build` adds the manifest and icon
   resource arguments itself, so only a Windows build can say. Steps from the plan: put the line on a branch, push it (the user's step), look at Windows CI (clippy, tests), then on the work laptop build the NSIS installer and check the exe icon and manifest,
   that the app starts and that `lp-winauth` registers; drop the change if any of these fails. Its gain is unmeasured; expect it to matter only for link-bound steps like M1/M2 on Windows.
 
@@ -122,6 +122,6 @@ Reproduce: `bench.sh` was a throwaway script (warm-up build, `touch`, `time` aro
 
 ## Next (fresh chat)
 
-7.5 (duplicate logins), then 7.6 (the plan's order). On 2026-11-01 the user checked 7.4 (picture paste, file dialog; "all work") and 7.2 (Esc and click outside, after loading the temporary add-on). They also confirmed 7.3 (hide/show) and the 7.2 Unlock side check. **Still open, all Windows:** the `rust-lld.exe` step of 7.1 and the Windows items of 7.4 (Win+Shift+S then Ctrl+V; "Scan QR on screen" on two monitors). The user has a Windows machine but cannot get the code there until it is committed and pushed, so these wait for a commit.
+7.5 (duplicate logins), then 7.6 (the plan's order). On 2026-11-01 the user checked 7.4 (picture paste, file dialog; "all work") and 7.2 (Esc and click outside, after loading the temporary add-on). They also confirmed 7.3 (hide/show) and the 7.2 Unlock side check. On Windows the user then reported that the QR functions of 7.4 work and the `rust-lld.exe` build of 7.1 works, so nothing is open on the user's side except what is noted above. `phase7` is pushed, so the user could fetch it on Windows. On 2026-11-01 Settings > Windows passkeys > Set up failed there with `register failed, hr=0x80090029` (`NTE_NOT_SUPPORTED`; no Phase 7 change touches lp-winauth or the settings page) while the user was connected by Remote Desktop; after working at the PC itself the set-up worked. The user's reading is that Remote Desktop was the cause (not proven; TPM or a Hello PIN was the other guess, never checked). The README now says to do the set-up at the PC itself.
 
 Facts the plan relies on were checked in the code on 2026-10-31; re-check the ones a task touches (the plan's "Facts" section lists them with file and line).
