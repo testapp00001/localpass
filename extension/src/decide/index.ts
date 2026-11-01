@@ -44,6 +44,8 @@ interface Button {
   primary?: boolean;
   /** Cancelling or handing the request back cannot do harm, so it works at once. */
   safe?: boolean;
+  /** What Esc (and a click outside, for some decisions) does in this view: the button that cancels or closes. */
+  dismiss?: boolean;
   onClick: () => void;
 }
 interface Row {
@@ -70,6 +72,51 @@ function hold() {
 window.addEventListener("focus", hold);
 document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && hold());
 
+// ---- closing without choosing: Esc, and a click outside for the two decisions that can be taken back ----
+
+/** The current view's way out (Cancel, Close or Not now); undefined for a view that only reports. */
+let dismiss: (() => void) | undefined;
+/** Set once the way out has been taken, so a second key press or a second blur does not send a second answer. */
+let dismissed = false;
+/** The decision this window is for (known after `decisionInfo`). */
+let decision: DecisionInfo["decision"] | undefined;
+/** True while an answer is carried out or the app's own prompt (Unlock) is on screen: the app takes focus then. */
+let working = false;
+/** A window that Wayland opened without focus must not be closed by the focus it never had. */
+let hadFocus = document.hasFocus();
+let outsideTimer: ReturnType<typeof setTimeout> | undefined;
+
+function takeWayOut() {
+  if (dismissed || !dismiss) return;
+  dismissed = true;
+  dismiss();
+}
+
+// Esc does what the Cancel button does, even during the hold (Cancel is safe). Not a key held down, and not
+// the Esc that closes an input method's composition.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.repeat || e.isComposing || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+  e.preventDefault();
+  takeWayOut();
+});
+
+/**
+ * A click outside takes focus away. Only for choosing a login and for saving one: a passkey window is the
+ * answer to a site's own WebAuthn call, which a stray click on the page must not silently fail.
+ */
+const outsideCloses = () => (decision === "chooseLogin" || decision === "saveLogin") && hadFocus && !working && !!dismiss;
+window.addEventListener("focus", () => {
+  hadFocus = true;
+  clearTimeout(outsideTimer);
+});
+window.addEventListener("blur", () => {
+  clearTimeout(outsideTimer);
+  if (!outsideCloses()) return;
+  outsideTimer = setTimeout(() => {
+    if (outsideCloses() && !document.hasFocus()) takeWayOut();
+  }, timing.outsideMs);
+});
+
 function show(lines: string[], buttons: Button[] = [], rows: Row[] = []) {
   guarded = [];
   const nodes: Node[] = lines.map((line, i) => el("p", i === 0 ? "lead" : "line muted", line));
@@ -94,25 +141,29 @@ function show(lines: string[], buttons: Button[] = [], rows: Row[] = []) {
     bar.append(button);
   }
   nodes.push(bar);
+  dismiss = buttons.find((b) => b.dismiss)?.onClick;
+  if (dismiss) nodes.push(el("p", "hint", "Esc to close"));
   main.replaceChildren(...nodes);
   hold();
   // Nothing that acts is focused: a key the user was already pressing must not choose for them.
   (main.querySelector("button.safe") as HTMLElement | null)?.focus();
 }
 
-const cancel: Button = { label: "Cancel", safe: true, onClick: () => void answer({ action: "cancel" }).catch(() => window.close()) };
-const close: Button = { label: "Close", safe: true, onClick: () => cancel.onClick() };
+const cancel: Button = { label: "Cancel", safe: true, dismiss: true, onClick: () => void answer({ action: "cancel" }).catch(() => window.close()) };
+const close: Button = { label: "Close", safe: true, dismiss: true, onClick: () => cancel.onClick() };
 const another: Button = { label: "Use another method", safe: true, onClick: () => void answer({ action: "fallback" }).catch(() => window.close()) };
 
 /** Sends the answer; the background closes this window when it worked. */
 async function carryOut(a: DecisionAnswer, failed: string, extra: Button[]) {
   show(["Waiting for LocalPass…", "Confirm in the LocalPass app if it asks."], [cancel]);
+  working = true;
   try {
     const done = await answer(a);
     if (done.message) show([done.message]);
   } catch (e) {
     // The window stays open to say what happened; closing it tells the page the same.
     paused = false;
+    working = false;
     if (code(e) === "cancelled" || code(e) === "notFound") return window.close();
     show([code(e) === "denied" ? "Nothing was changed." : failed, text(e)], [...extra, close]);
   }
@@ -124,7 +175,15 @@ function unlockButton(again: () => void): Button {
   return {
     label: "Unlock",
     primary: true,
-    onClick: () => void ask({ kind: "unlock" }).then(again, () => again()),
+    onClick: () => {
+      working = true;
+      void ask({ kind: "unlock" })
+        .catch(() => undefined)
+        .then(() => {
+          working = false;
+          again();
+        });
+    },
   };
 }
 
@@ -159,7 +218,7 @@ function saveLogin(info: Extract<DecisionInfo, { decision: "saveLogin" }>) {
     ["Save this login to LocalPass?", `${displayText(info.username, 60) || "(no username)"} on ${displayText(info.host, 80)}`],
     [
       { label: "Save", primary: true, onClick: () => void carryOut({ action: "save" }, "Could not save the login.", []) },
-      { label: "Not now", safe: true, onClick: cancel.onClick },
+      { label: "Not now", safe: true, dismiss: true, onClick: cancel.onClick },
       { label: "Never for this site", onClick: () => void answer({ action: "never" }).catch(() => window.close()) },
     ],
   );
@@ -207,7 +266,7 @@ function keepAlive() {
     ask<DecisionInfo>({ kind: "decisionInfo", id }).catch((e) => {
       if (code(e) !== "notFound") return;
       clearInterval(timer);
-      show(["This request is no longer open.", "LocalPass forgot it. Try again from the page."], [{ label: "Close", onClick: () => window.close() }]);
+      show(["This request is no longer open.", "LocalPass forgot it. Try again from the page."], [{ label: "Close", safe: true, dismiss: true, onClick: () => window.close() }]);
     });
   }, timing.keepAliveMs);
 }
@@ -220,9 +279,10 @@ async function start() {
   try {
     info = await ask<DecisionInfo>({ kind: "decisionInfo", id });
   } catch (e) {
-    return show(["This request is no longer open.", text(e)], [{ label: "Close", onClick: () => window.close() }]);
+    return show(["This request is no longer open.", text(e)], [{ label: "Close", safe: true, dismiss: true, onClick: () => window.close() }]);
   }
   siteLabel.textContent = displayText(info.host, 80);
+  decision = info.decision;
   switch (info.decision) {
     case "passkeyCreate":
       return createPasskey(info);

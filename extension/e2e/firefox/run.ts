@@ -141,6 +141,13 @@ try {
   check("Cancel works at once", cancelEnabled === "false", cancelEnabled);
   await sleep(900);
   check("the row is enabled again after the hold", (await h.ev<string>(win, `String(document.querySelector('#main button.row').disabled)`)) === "false");
+  // Esc closes the chooser and fills nothing; the badge then opens a fresh one.
+  await h.pressKey(win, "Escape");
+  check("Esc closes the chooser", await h.windowGone(win));
+  check("Esc filled nothing", (await h.ev<string>(login, "document.getElementById('u').value + document.getElementById('p').value")) === "");
+  await h.trustedClick(login, ready);
+  win = await h.decisionWindow();
+  await h.waitWindowText(win, /Fill a login/);
   // A page cannot see or press anything in the window; a click inside it chooses.
   check("nothing is filled before a row is clicked in the window", (await h.ev<string>(login, "document.getElementById('u').value + document.getElementById('p').value")) === "");
   await h.clickWindow(win, /^Local site/);

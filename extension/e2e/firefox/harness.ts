@@ -182,6 +182,8 @@ export class FirefoxHarness {
           XDG_CACHE_HOME: join(this.home, ".cache"),
           ...(this.assisted ? {} : { XDG_RUNTIME_DIR: this.runtime, MOZ_HEADLESS: "1" }),
           LOCALPASS_PROFILE: this.profile,
+          // Firefox 159 refuses scripts in extension pages unless this variable is set (the flag alone worked in 158).
+          MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: "1",
         },
         stdout: "ignore",
         stderr: "ignore",
@@ -305,6 +307,15 @@ export class FirefoxHarness {
       );
       return r === "clicked";
     }, timeoutMs);
+  }
+
+  /** A key press the browser reports as a real one (BiDi input) in this context. WebDriver code points: Escape is U+E00C. */
+  async pressKey(context: string, key: "Escape") {
+    const value = { Escape: "\uE00C" }[key];
+    await this.send("input.performActions", {
+      context,
+      actions: [{ type: "key", id: "k", actions: [{ type: "keyDown", value }, { type: "keyUp", value }] }],
+    });
   }
 
   /** A click the browser reports as a real one (BiDi input), on the centre of an element found by `rectExpr`. */

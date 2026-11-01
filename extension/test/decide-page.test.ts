@@ -14,10 +14,10 @@ let savedUrl = "";
 
 const happy = () => (window as unknown as { happyDOM: { setURL(u: string): void } }).happyDOM;
 
-async function openPage(info: Json) {
+async function openPage(info: Json, extra: Record<string, (message: Json) => unknown> = {}) {
   installChrome();
   sent = [];
-  answers = { decisionInfo: () => ({ ok: true, data: info }) };
+  answers = { decisionInfo: () => ({ ok: true, data: info }), ...extra };
   const chromeApi = (globalThis as unknown as { chrome: { runtime: Json } }).chrome;
   chromeApi.runtime.connect = () => ({});
   chromeApi.runtime.sendMessage = async (message: Json) => {
@@ -34,13 +34,33 @@ const main = () => document.getElementById("main")!;
 const buttons = () => [...main().querySelectorAll("button")];
 const button = (label: string) => buttons().find((b) => b.textContent === label)!;
 
+/** Every page the tests import adds listeners to the shared window and document; they are removed after each test, so an earlier page cannot answer a later test's key press. */
+const listeners: [EventTarget, string, EventListenerOrEventListenerObject, unknown][] = [];
+const realHasFocus = document.hasFocus;
+const realAdd = new Map<EventTarget, EventTarget["addEventListener"]>([[window, window.addEventListener], [document, document.addEventListener]]);
+
 beforeEach(() => {
   savedUrl = window.location.href;
   // Tests act at once and do not wait for pings (the tests of the rules below turn them on).
   timing.holdMs = 0;
   timing.keepAliveMs = 3_600_000;
+  timing.outsideMs = 20;
+  for (const target of [window, document] as EventTarget[]) {
+    const add = realAdd.get(target)!.bind(target);
+    target.addEventListener = ((type: string, fn: EventListenerOrEventListenerObject, options?: unknown) => {
+      listeners.push([target, type, fn, options]);
+      add(type, fn, options as AddEventListenerOptions);
+    }) as typeof target.addEventListener;
+  }
 });
+/** Removes what the pages imported so far listen with, so only the next page reacts to keys and focus. */
+function dropListeners() {
+  for (const [target, type, fn, options] of listeners.splice(0)) target.removeEventListener(type, fn, options as AddEventListenerOptions);
+}
 afterEach(() => {
+  dropListeners();
+  for (const [target, add] of realAdd) target.addEventListener = add;
+  document.hasFocus = realHasFocus;
   happy().setURL(savedUrl);
   document.body.innerHTML = "";
 });
@@ -266,5 +286,199 @@ describe("keeping the background awake", () => {
     await until(() => sent.filter((m) => m.kind === "decisionInfo").length > before, 1000, "a ping after the failure");
     answers.decisionInfo = () => ({ ok: false, code: "notFound", message: "gone" });
     await until(() => main().textContent!.includes("LocalPass forgot it"));
+  });
+});
+
+describe("closing without choosing: Esc, and a click outside for choosing and saving", () => {
+  const CHOOSE = { decision: "chooseLogin", origin: "https://a.example", host: "a.example" };
+  const SAVE = { decision: "saveLogin", origin: "https://a.example", host: "a.example", username: "alice" };
+  const GET = { decision: "passkeyGet", origin: "https://login.example.com", host: "login.example.com", rpId: "example.com" };
+  const logins = () => ({ ok: true, data: { status: "ok", logins: [{ id: "i1", title: "Example", username: "alice" }] } });
+  const never = () => new Promise(() => {});
+  let focused = true;
+  const sentAnswers = () => sent.filter((m) => m.kind === "decisionAnswer");
+
+  /** The window starts focused (or not), and `focused` is what `document.hasFocus()` says from then on. */
+  async function open(info: Json, extra: Record<string, (message: Json) => unknown> = {}, startFocused = true) {
+    dropListeners(); // a test that opens several windows in turn: the earlier ones are gone
+    focused = startFocused;
+    document.hasFocus = () => focused;
+    await openPage(info, extra);
+  }
+  const press = (init: KeyboardEventInit = {}) => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, ...init }));
+  const lose = () => {
+    focused = false;
+    window.dispatchEvent(new Event("blur"));
+  };
+  const gain = () => {
+    focused = true;
+    window.dispatchEvent(new Event("focus"));
+  };
+  const cancelled = () => expect(sentAnswers().at(-1)).toEqual({ kind: "decisionAnswer", id: "abc", answer: { action: "cancel" } });
+
+  test("Esc does what Cancel does, even while the window still holds its acting controls", async () => {
+    timing.holdMs = 150;
+    await open(CREATE_INFO);
+    expect(button("Create passkey").disabled).toBe(true);
+    press();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+  });
+
+  test("Esc is the way out of every view: the chooser, the save offer (Not now) and an error (Close)", async () => {
+    await open(CHOOSE, { decisionLogins: logins });
+    await until(() => !!main().querySelector(".row"));
+    press();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+    await open(SAVE);
+    press();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+    await open(CHOOSE, { decisionLogins: () => ({ ok: true, data: { status: "locked", logins: [] } }) });
+    await until(() => !!button("Unlock"));
+    press();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+    await open(CHOOSE, { decisionLogins: () => ({ ok: true, data: { status: "appNotRunning", logins: [] } }) });
+    await until(() => main().textContent!.includes("Can't reach LocalPass"));
+    press();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+  });
+
+  test("a held key, a composition, a modifier or another key is not Esc; one Esc sends one answer", async () => {
+    await open(SAVE);
+    press({ repeat: true });
+    press({ isComposing: true });
+    press({ ctrlKey: true });
+    press({ shiftKey: true });
+    press({ key: "Enter" });
+    await sleep(60);
+    expect(sentAnswers()).toEqual([]);
+    press();
+    press();
+    await sleep(60);
+    expect(sentAnswers().length).toBe(1);
+  });
+
+  test("the hint is shown where Esc works, and not on a view that only reports", async () => {
+    await open(CREATE_INFO);
+    expect(main().querySelector(".hint")!.textContent).toBe("Esc to close");
+    await open(SAVE, { decisionAnswer: () => ({ ok: true, data: { message: "Saved to LocalPass." } }) });
+    button("Save").click();
+    await until(() => main().textContent!.includes("Saved to LocalPass."));
+    expect(main().querySelector(".hint")).toBeNull();
+    press();
+    await sleep(60);
+    expect(sentAnswers().length).toBe(1); // only the Save answer
+  });
+
+  test("Esc in the waiting view is a Cancel, as the button is", async () => {
+    await open(CHOOSE, { decisionLogins: logins, decisionAnswer: never });
+    await until(() => !!main().querySelector(".row"));
+    main().querySelector<HTMLButtonElement>(".row")!.click();
+    await until(() => main().textContent!.includes("Waiting for LocalPass"));
+    press();
+    await until(() => sentAnswers().length === 2);
+    cancelled();
+  });
+
+  test("a chooser or a save offer that lost focus and did not get it back is closed", async () => {
+    await open(CHOOSE, { decisionLogins: logins });
+    await until(() => !!main().querySelector(".row"));
+    lose();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+    await open(SAVE);
+    lose();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+  });
+
+  test("focus that comes straight back keeps the window", async () => {
+    await open(CHOOSE, { decisionLogins: logins });
+    await until(() => !!main().querySelector(".row"));
+    lose();
+    gain();
+    await sleep(80);
+    window.dispatchEvent(new Event("blur")); // a blur while the window still has focus (a tooltip, the title bar)
+    await sleep(80);
+    expect(sentAnswers()).toEqual([]);
+    lose(); // and a real loss afterwards still closes it
+    await until(() => sentAnswers().length === 1);
+  });
+
+  test("a window that never had focus is not closed by a blur, and is once it has had it", async () => {
+    await open(SAVE, {}, false);
+    window.dispatchEvent(new Event("blur"));
+    await sleep(80);
+    expect(sentAnswers()).toEqual([]);
+    gain();
+    lose();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+  });
+
+  test("losing focus while an answer is carried out does nothing; after a refusal the window is armed again", async () => {
+    let refuse: (reply: unknown) => void = () => {};
+    await open(CHOOSE, { decisionLogins: logins, decisionAnswer: () => new Promise((resolve) => (refuse = resolve)) });
+    await until(() => !!main().querySelector(".row"));
+    main().querySelector<HTMLButtonElement>(".row")!.click();
+    await until(() => sentAnswers().length === 1);
+    lose(); // the LocalPass app raises its own confirm dialog now
+    await sleep(80);
+    expect(sentAnswers().length).toBe(1);
+    refuse({ ok: false, code: "denied", message: "no" });
+    await until(() => main().textContent!.includes("Nothing was changed."));
+    gain();
+    lose();
+    await until(() => sentAnswers().length === 2);
+    cancelled();
+  });
+
+  test("losing focus while the app's Unlock is on screen does nothing, and the chooser that follows is armed", async () => {
+    let unlocked = false;
+    let finish: (reply: unknown) => void = () => {};
+    await open(CHOOSE, {
+      decisionLogins: () => (unlocked ? logins() : { ok: true, data: { status: "locked", logins: [] } }),
+      unlock: () => new Promise((resolve) => (finish = resolve)),
+    });
+    await until(() => !!button("Unlock"));
+    button("Unlock").click();
+    lose(); // the app's own prompt took focus
+    await sleep(80);
+    expect(sentAnswers()).toEqual([]);
+    unlocked = true;
+    finish({ ok: true, data: {} });
+    await until(() => !!main().querySelector(".row"));
+    gain();
+    lose();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+  });
+
+  test("a passkey window is closed by Esc only: a stray click on the page must not fail the site's WebAuthn call", async () => {
+    await open(CREATE_INFO);
+    lose();
+    await sleep(80);
+    expect(sentAnswers()).toEqual([]);
+    await open(GET, { decisionCandidates: () => ({ ok: true, data: [{ itemId: "k1", rpId: "example.com", rpName: "Example", userName: "alice", userDisplayName: "Alice", credentialId: "c", userHandle: "u", createdMs: 0 }] }) });
+    await until(() => !!main().querySelector(".row"));
+    lose();
+    await sleep(80);
+    expect(sentAnswers()).toEqual([]);
+    press();
+    await until(() => sentAnswers().length === 1);
+    cancelled();
+  });
+
+  test("before the decision is known nothing closes the window", async () => {
+    await open({ decision: "saveLogin" }, { decisionInfo: never });
+    lose();
+    await sleep(80);
+    press();
+    await sleep(40);
+    expect(sentAnswers()).toEqual([]);
   });
 });

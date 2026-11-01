@@ -9,3 +9,4 @@ main { max-height: none; padding: 16px; }
 .row:hover, .row:focus { background: var(--hover); outline: none; }
 .row .sub { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .buttons { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.hint { margin: 10px 0 0; font-size: 11px; color: var(--muted); text-align: right; }
