@@ -84,6 +84,62 @@ pub fn copy_secret(
     Ok(())
 }
 
+/// A picture on the clipboard, as RGBA. The pixels may show a 2FA secret, so they are wiped on drop.
+#[cfg(desktop)]
+pub struct ClipImage {
+    pub width: usize,
+    pub height: usize,
+    pub rgba: Zeroizing<Vec<u8>>,
+}
+
+/// The picture the user copied (a screenshot of a QR code), or a message saying there is none.
+#[cfg(desktop)]
+pub fn read_image() -> Result<ClipImage, String> {
+    with_clipboard(|cb| {
+        match cb.get_image() {
+        Ok(image) => Ok(ClipImage {
+            width: image.width,
+            height: image.height,
+            rgba: Zeroizing::new(image.bytes.into_owned()),
+        }),
+        Err(arboard::Error::ContentNotAvailable) => Err(
+            "There is no picture on the clipboard. Copy a screenshot of the QR code first (for example PrtSc, Win+Shift+S, or \"Copy\" in your browser's screenshot tool), then paste it here."
+                .into(),
+        ),
+        Err(e) => Err(format!("Could not read a picture from the clipboard: {e}")),
+    }
+    })
+}
+
+/// Empties the clipboard if it still holds exactly this picture, so the secret does not stay in it.
+/// Returns whether it did. Something else the user copied in the meantime is left alone.
+#[cfg(desktop)]
+pub fn clear_if_image(image: &ClipImage) -> bool {
+    with_clipboard(|cb| {
+        let same = cb.get_image().is_ok_and(|now| {
+            now.width == image.width
+                && now.height == image.height
+                && now.bytes[..] == image.rgba[..]
+        });
+        if same {
+            // An older "clear the copied password" timer must not clear something newer than this.
+            GENERATION.fetch_add(1, Ordering::SeqCst);
+            // On GNOME Wayland an X11 client cannot drop a picture that a Wayland program (the
+            // browser, the screenshot tool) put there: a bare `clear()` left it in place
+            // (measured). Owning the clipboard with empty text replaces it, and a `clear()` a
+            // moment later, once the desktop has taken that over, drops our own claim as well. With
+            // no pause the second step ran first and the picture stayed.
+            #[cfg(target_os = "linux")]
+            if cb.set().text("").is_ok() {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            cb.clear().map_err(|e| e.to_string())?;
+        }
+        Ok(same)
+    })
+    .unwrap_or(false)
+}
+
 #[cfg(target_os = "android")]
 pub fn copy_secret(
     app: &tauri::AppHandle,

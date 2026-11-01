@@ -17,6 +17,8 @@ mod mobile;
 pub mod native_host;
 #[cfg(any(windows, target_os = "linux"))]
 mod native_messaging;
+#[cfg(desktop)]
+mod qr;
 mod settings;
 mod windows_passkeys;
 
@@ -489,6 +491,12 @@ pub fn run() {
             commands::copy_field,
             commands::copy_text,
             commands::totp_code,
+            #[cfg(desktop)]
+            commands::totp_qr_from_clipboard,
+            #[cfg(desktop)]
+            commands::totp_qr_from_file,
+            #[cfg(desktop)]
+            commands::totp_qr_from_screen,
             commands::generate_password,
             commands::folders,
             commands::save_folder,

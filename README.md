@@ -390,6 +390,14 @@ notification.
   services may download its scanning model the first time, and phones without
   Play services can't scan. Everything else works without Google services; type
   the pairing code or the 2FA key instead.
+- On the desktop, a 2FA setup QR code is read from a picture: a screenshot you
+  paste (Ctrl+V), the screen, or an image file. LocalPass decodes it itself, writes
+  nothing to disk and empties the clipboard afterwards. But a screenshot of a QR
+  code is the 2FA secret, and programs outside LocalPass may keep a copy: a
+  clipboard manager or Windows clipboard history, or the screenshot tool's own
+  file (GNOME's PrtSc saves one in Pictures/Screenshots; "Scan QR on screen" on
+  Linux deletes the file its own screenshot makes). Delete those copies, or turn
+  off clipboard history for the moment.
 - A device with a badly wrong clock can win edits it shouldn't. The app warns
   when a peer's clock is off by more than a minute.
 - Pairing can be slowed down by someone else on the same network: a host there

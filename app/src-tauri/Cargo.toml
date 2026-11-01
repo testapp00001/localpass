@@ -35,9 +35,16 @@ zxcvbn = "3"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
-arboard = { version = "3", default-features = false }
+# `image-data`: "Paste QR image" reads a copied screenshot from the clipboard (qr.rs).
+arboard = { version = "3", default-features = false, features = ["image-data"] }
+# Reading a 2FA setup QR from a picture (qr.rs). Pure Rust; only the formats a screenshot or a
+# downloaded QR comes in.
+rqrr = { version = "0.11", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# "Scan QR on screen": GNOME's screenshot picker through xdg-desktop-portal (qr.rs).
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot"] }
 # The device secret and the paired clients are sealed with a key in the desktop keyring.
 lp-engine = { workspace = true, features = ["keyring"] }
 
@@ -65,6 +72,11 @@ windows = { version = "0.62", features = [
 # The async types the `windows` crate hands out (already in the dependency tree); needed to
 # cancel a pending Windows Hello check.
 windows-future.workspace = true
+
+[dev-dependencies]
+# qr.rs tests draw QR codes and write picture files.
+qrcode.workspace = true
+tempfile.workspace = true
 
 [features]
 # Used by `tauri dev`/`tauri build` to serve the bundled frontend.

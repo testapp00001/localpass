@@ -3,6 +3,7 @@ import { CreditCard, KeyRound, Plus, ScanLine, StickyNote, Trash2, Wand2, X } fr
 import { api, emptyItem, errorText, type FolderView, type ItemInput, type ItemKind } from "../lib/api";
 import { Button, ErrorText, IconButton, PasswordInput, SecretTextArea, Select, TextArea, TextInput, Toggle } from "../components/ui";
 import { PasswordGenerator } from "../components/PasswordGenerator";
+import { TotpQrTools } from "../components/TotpQrTools";
 import { canScan, scanQr } from "../lib/scan";
 
 const kinds: { kind: ItemKind; label: string; icon: typeof KeyRound }[] = [
@@ -58,6 +59,16 @@ export function ItemEditor({
   const setCard = (patch: Partial<NonNullable<ItemInput["card"]>>) =>
     setItem((i) => (i ? { ...i, card: { ...(i.card ?? emptyItem("card").card!), ...patch } } : i));
   const urls = item.urls.length ? item.urls : [""];
+  const totpField = (
+    <TextInput
+      label="2FA secret (optional)"
+      value={item.totp}
+      onChange={(e) => set({ totp: e.target.value })}
+      placeholder="otpauth://… or base32 key"
+      hint="Paste the setup key or otpauth:// link shown when you enable two-factor authentication."
+      className="secret"
+    />
+  );
 
   const save = async () => {
     setBusy(true);
@@ -140,16 +151,9 @@ export function ItemEditor({
                 + Add website
               </button>
             </div>
-            <div className="space-y-2">
-              <TextInput
-                label="2FA secret (optional)"
-                value={item.totp}
-                onChange={(e) => set({ totp: e.target.value })}
-                placeholder="otpauth://… or base32 key"
-                hint="Paste the setup key or otpauth:// link shown when you enable two-factor authentication."
-                className="secret"
-              />
-              {canScan && (
+            {canScan ? (
+              <div className="space-y-2">
+                {totpField}
                 <Button
                   type="button"
                   variant="secondary"
@@ -167,8 +171,12 @@ export function ItemEditor({
                   <ScanLine className="size-4" />
                   Scan setup QR code
                 </Button>
-              )}
-            </div>
+              </div>
+            ) : (
+              <TotpQrTools value={item.totp} onFound={(uri) => set({ totp: uri })}>
+                {totpField}
+              </TotpQrTools>
+            )}
           </>
         )}
 

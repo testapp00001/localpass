@@ -470,6 +470,83 @@ pub fn totp_code(state: State<'_, AppState>, id: String) -> CmdResult<TotpCode> 
     state.engine.totp_code(&id).map_err(err)
 }
 
+// ---- 2FA setup QR codes from a picture (desktop; a phone scans with its camera) ----
+
+/// What a QR scan hands back: the link for the 2FA field and whether the copied picture was
+/// cleared from the clipboard.
+#[cfg(desktop)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TotpQr {
+    #[serde(flatten)]
+    found: crate::qr::Found,
+    clipboard_cleared: bool,
+}
+
+#[cfg(desktop)]
+impl From<crate::qr::Found> for TotpQr {
+    fn from(found: crate::qr::Found) -> Self {
+        Self {
+            found,
+            clipboard_cleared: false,
+        }
+    }
+}
+
+/// "Paste QR image": reads the picture on the system clipboard (no file, and the pixels never
+/// reach the web view), finds the 2FA code in it and then empties the clipboard.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn totp_qr_from_clipboard(state: State<'_, AppState>) -> CmdResult<TotpQr> {
+    state.touch();
+    blocking(|| {
+        let image = clipboard::read_image()?;
+        let found = crate::qr::from_rgba(image.width, image.height, &image.rgba).map_err(err)?;
+        Ok(TotpQr {
+            found,
+            clipboard_cleared: clipboard::clear_if_image(&image),
+        })
+    })
+    .await
+}
+
+/// A picture file chosen in the open dialog or dropped on the window.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn totp_qr_from_file(state: State<'_, AppState>, path: String) -> CmdResult<TotpQr> {
+    state.touch();
+    blocking(move || {
+        crate::qr::from_file(std::path::Path::new(&path))
+            .map(TotpQr::from)
+            .map_err(err)
+    })
+    .await
+}
+
+/// "Scan QR on screen": LocalPass steps aside, the screen is captured (Windows: all monitors;
+/// Linux: the desktop's screenshot picker) and the window comes back. `None` when the user closed
+/// the picker.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn totp_qr_from_screen(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<TotpQr>> {
+    state.touch();
+    // If the window cannot step aside, the capture still works; the window may just be in it.
+    let _ = window.minimize();
+    // Let the window finish disappearing; otherwise it can be in the picture.
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    #[cfg(target_os = "linux")]
+    let found = crate::qr::from_screen().await.map_err(err);
+    #[cfg(not(target_os = "linux"))]
+    let found = blocking(|| crate::qr::from_screen().map_err(err)).await;
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    state.touch();
+    Ok(found?.map(TotpQr::from))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Generated {

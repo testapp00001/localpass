@@ -125,6 +125,14 @@ export interface ItemView extends Omit<ItemInput, "id"> {
   conflicts: ConflictView[];
 }
 
+/** A 2FA setup QR code found in a picture. `clipboardCleared`: the copied picture was removed from the clipboard. */
+export interface TotpQr {
+  uri: string;
+  issuer: string | null;
+  account: string | null;
+  clipboardCleared: boolean;
+}
+
 export interface TotpCode {
   code: string;
   period: number;
@@ -316,6 +324,10 @@ export const api = {
   copyField: (id: string, field: string) => invoke<number>("copy_field", { id, field }),
   copyText: (text: string) => invoke<number>("copy_text", { text }),
   totpCode: (id: string) => invoke<TotpCode>("totp_code", { id }),
+  // Desktop only: a 2FA setup QR code read from a copied picture, a picture file or the screen.
+  totpQrFromClipboard: () => invoke<TotpQr>("totp_qr_from_clipboard"),
+  totpQrFromFile: (path: string) => invoke<TotpQr>("totp_qr_from_file", { path }),
+  totpQrFromScreen: () => invoke<TotpQr | null>("totp_qr_from_screen"),
   generatePassword: (options: PasswordOptions) =>
     invoke<{ password: string; entropyBits: number }>("generate_password", { options }),
 
