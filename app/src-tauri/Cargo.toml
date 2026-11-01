@@ -8,7 +8,9 @@ license.workspace = true
 [lib]
 # The `_lib` suffix keeps the lib name distinct from the bin name (cargo#8519).
 name = "localpass_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# cdylib for Android, rlib for the desktop exe. No staticlib: only iOS needs it, and each build
+# would write one more copy of every dependency (hundreds of MB per profile and target).
+crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
