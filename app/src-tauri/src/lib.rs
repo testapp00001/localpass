@@ -480,6 +480,7 @@ pub fn run() {
             commands::quick_unlock_disable,
             commands::change_password,
             commands::list_items,
+            commands::find_duplicates,
             commands::get_item,
             commands::save_item,
             commands::trash_item,

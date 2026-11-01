@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, FileUp, Fingerprint, KeyRound, LogOut, Upload } from "lucide-react";
+import { Copy, Download, FileUp, Fingerprint, KeyRound, LogOut, Upload } from "lucide-react";
 import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, type AppInfo, type ImportReport, type Settings as AppSettings } from "../lib/api";
@@ -21,7 +21,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: () => void }) {
+export function Settings({ info, onInfoChange, onOpenDuplicates }: { info: AppInfo; onInfoChange: () => void; onOpenDuplicates: () => void }) {
   const toast = useToast();
   const [s, setS] = useState<AppSettings>(info.settings);
   const [deviceName, setDeviceName] = useState(info.deviceName ?? "");
@@ -190,6 +190,18 @@ export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: 
             }
           >
             Save
+          </Button>
+        </div>
+      </Section>
+
+      <Section title="Vault tools">
+        <div className="flex items-center justify-between gap-4 px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">Find duplicate logins</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">Logins saved twice with the same username and password for one website.</div>
+          </div>
+          <Button onClick={onOpenDuplicates}>
+            <Copy className="size-4" /> Find…
           </Button>
         </div>
       </Section>

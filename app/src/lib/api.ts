@@ -11,6 +11,7 @@ export interface Settings {
   startAtLogin: boolean;
   theme: "system" | "light" | "dark";
   passkeyVerifyEveryTime: boolean;
+  duplicatesIncludeSubdomains: boolean;
 }
 
 export interface AppInfo {
@@ -54,6 +55,22 @@ export interface ItemSummary {
   trashed: boolean;
   updatedMs: number;
   conflicted: boolean;
+}
+
+/** One saved copy in a group of duplicate logins (no secrets: only whether notes, 2FA and fields exist). */
+export interface DuplicateItem extends ItemSummary {
+  urls: string[];
+  hasNotes: boolean;
+  customFields: number;
+  updatedBy: string;
+}
+
+export interface DuplicateGroup {
+  /** The websites that two or more copies share. */
+  sites: string[];
+  username: string;
+  /** Two or more copies, the most recently changed first. */
+  items: DuplicateItem[];
 }
 
 export interface CardFields {
@@ -313,6 +330,7 @@ export const api = {
   changePassword: (old: string, next: string) => invoke<void>("change_password", { old, new: next }),
 
   listItems: (query: ItemQuery) => invoke<ItemSummary[]>("list_items", { query }),
+  findDuplicates: (includeSubdomains: boolean) => invoke<DuplicateGroup[]>("find_duplicates", { includeSubdomains }),
   getItem: (id: string) => invoke<ItemView>("get_item", { id }),
   saveItem: (input: ItemInput) => invoke<string>("save_item", { input }),
   trashItem: (id: string) => invoke<void>("trash_item", { id }),

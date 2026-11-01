@@ -19,6 +19,8 @@ pub struct Settings {
     /// Ask Windows Hello for every passkey sign-in, even if the website says it doesn't
     /// require a user check.
     pub passkey_verify_every_time: bool,
+    /// "Find duplicate logins": count a subdomain as the same site as its parent domain.
+    pub duplicates_include_subdomains: bool,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             start_at_login: true,
             theme: "system".into(),
             passkey_verify_every_time: true,
+            duplicates_include_subdomains: false,
         }
     }
 }

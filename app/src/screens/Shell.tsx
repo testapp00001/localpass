@@ -7,8 +7,9 @@ import { useToast } from "../components/Toaster";
 import { Vault, type Section } from "./Vault";
 import { Devices } from "./Devices";
 import { Settings } from "./Settings";
+import { Duplicates } from "./Duplicates";
 
-type Page = { page: "vault"; section: Section } | { page: "devices" } | { page: "settings" };
+type Page = { page: "vault"; section: Section } | { page: "devices" } | { page: "settings" } | { page: "duplicates" };
 
 function sectionTitle(s: Section, folders: FolderView[]): string {
   switch (s.kind) {
@@ -130,7 +131,7 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
       <div className="pt-4" />
       <NavButton active={isSection("trash")} onClick={() => setPage({ page: "vault", section: { kind: "trash" } })} icon={Trash2} label="Trash" />
       <NavButton active={page.page === "devices"} onClick={() => setPage({ page: "devices" })} icon={Laptop} label="Devices" />
-      <NavButton active={page.page === "settings"} onClick={() => setPage({ page: "settings" })} icon={SettingsIcon} label="Settings" />
+      <NavButton active={page.page === "settings" || page.page === "duplicates"} onClick={() => setPage({ page: "settings" })} icon={SettingsIcon} label="Settings" />
     </>
   );
 
@@ -174,7 +175,8 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
         <div className="h-full overflow-y-auto">
           {page.page === "vault" && <Vault section={page.section} folders={folders} title={sectionTitle(page.section, folders)} />}
           {page.page === "devices" && <Devices />}
-          {page.page === "settings" && <Settings info={info} onInfoChange={onInfoChange} />}
+          {page.page === "settings" && <Settings info={info} onInfoChange={onInfoChange} onOpenDuplicates={() => setPage({ page: "duplicates" })} />}
+          {page.page === "duplicates" && <Duplicates info={info} onInfoChange={onInfoChange} onBack={() => setPage({ page: "settings" })} />}
         </div>
       </main>
 
@@ -184,7 +186,7 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
             ["Items", VaultIcon, () => setPage({ page: "vault", section: { kind: "all" } }), page.page === "vault" && page.section.kind !== "trash"],
             ["Trash", Trash2, () => setPage({ page: "vault", section: { kind: "trash" } }), isSection("trash")],
             ["Devices", Laptop, () => setPage({ page: "devices" }), page.page === "devices"],
-            ["Settings", SettingsIcon, () => setPage({ page: "settings" }), page.page === "settings"],
+            ["Settings", SettingsIcon, () => setPage({ page: "settings" }), page.page === "settings" || page.page === "duplicates"],
           ] as const
         ).map(([label, Icon, go, active]) => (
           <button key={label} onClick={go} className={`flex flex-col items-center gap-0.5 py-2 text-xs ${active ? "text-indigo-600 dark:text-indigo-400" : "text-slate-500"}`}>

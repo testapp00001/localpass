@@ -9,6 +9,7 @@
 pub mod backup;
 pub mod credentials;
 pub mod devices;
+pub mod duplicates;
 pub mod error;
 pub mod import_export;
 pub mod items;
@@ -48,6 +49,7 @@ pub use credentials::{
     PasskeyCreateRequest, PasskeyCreated, SaveChange, SaveLoginOutcome, SavePlan, SaveStatus,
 };
 pub use devices::{DeviceInfo, InviteInfo, PairingRequest};
+pub use duplicates::{DuplicateGroup, DuplicateItem};
 pub use error::{EngineError, Result};
 pub use import_export::ImportReport;
 pub use items::{FolderView, ItemInput, ItemQuery, ItemSummary, ItemView, PasskeyView, TotpCode};

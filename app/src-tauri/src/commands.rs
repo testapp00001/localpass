@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use lp_core::passgen::PasswordOptions;
 use lp_engine::{
-    DeviceInfo, Engine, FolderView, ImportReport, InviteInfo, ItemInput, ItemQuery, ItemSummary,
-    ItemView, SyncStatus, TotpCode, VaultStatus,
+    DeviceInfo, DuplicateGroup, Engine, FolderView, ImportReport, InviteInfo, ItemInput, ItemQuery,
+    ItemSummary, ItemView, SyncStatus, TotpCode, VaultStatus,
 };
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -388,6 +388,19 @@ pub async fn change_password(
 #[tauri::command]
 pub fn list_items(state: State<'_, AppState>, query: ItemQuery) -> CmdResult<Vec<ItemSummary>> {
     state.engine.list_items(&query).map_err(err)
+}
+
+/// Logins saved twice (same username and password, same website). Carries no secret.
+#[tauri::command]
+pub fn find_duplicates(
+    state: State<'_, AppState>,
+    include_subdomains: bool,
+) -> CmdResult<Vec<DuplicateGroup>> {
+    state.touch();
+    state
+        .engine
+        .find_duplicate_logins(include_subdomains)
+        .map_err(err)
 }
 
 #[tauri::command]

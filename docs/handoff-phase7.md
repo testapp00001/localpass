@@ -8,8 +8,8 @@ state; do not rely on conversation history. All plans: `docs/plans/README.md`.
 Phases 0-6 are done except 5.6 (the Windows final matrix, on the work laptop; `docs/handoff-phase4-5.md`). v0.2.2 is the last release; the user
 tested and approved it on 2026-10-31. Phase 7 started from a clean tree at `d4eb731`.
 
-**Branch:** tasks 7.0-7.4 are committed on branch `phase7` (five commits on top of `d4eb731`: build config, Firefox Esc/click-outside, hidden notes, desktop QR, docs) and pushed to
-`origin/phase7` on 2026-11-01 at the user's request, so the Windows PC can fetch it for the open Windows checks. `main` is still at v0.2.2. Keep working on `phase7`; merging into `main` is the user's call.
+**Branch:** work is on branch `phase7` (`main` is still at v0.2.2; merging into `main` is the user's call). As of 2026-11-01 the first five commits (build config, Firefox Esc/click-outside, hidden notes, desktop QR, docs) are pushed to
+`origin/phase7` at the user's request, so the Windows PC could fetch them. Later commits (the Windows results, 7.5) stay local until the user says to push (the user has asked only for commits since).
 
 Rules (the plan's "Working rules"; the agent rule itself is in `CLAUDE.md`, "Working with agents"):
 - One task per fresh chat. 7.0-7.3 are small and independent; do the later tasks in the order of the plan.
@@ -87,7 +87,27 @@ other subdomains stay separate unless the option is on.
   no file is left in `~/Pictures/Screenshots` (find where the portal wrote it; closing the picker leaves the form as it was); (3) a PNG from the file dialog and one dropped on the block (drop events need
   `core:event`, so check it really fires on WebKitGTK and WebView2); (4) Windows: Win+Shift+S then Ctrl+V, and "Scan QR on screen" on two monitors; (5) a non-2FA QR, a Google Authenticator export QR, a
   HOTP QR and a picture without a code give the right message.
-- [ ] 7.5 Duplicate logins
+- [x] 7.5 Duplicate logins (2026-11-01, done; the user checked the screen in `LOCALPASS_PROFILE=dev bun run tauri dev` with the seed below and said it all worked as expected). Done in the same chat as the fixes after 7.4, at the user's word "start next".
+  Engine: `crates/lp-engine/src/duplicates.rs`, `Engine::find_duplicate_logins(include_subdomains) -> Vec<DuplicateGroup>` (re-exported with `DuplicateItem`). Live logins only (not trashed, `kind=login`) with a non-empty password
+  and at least one readable website; username trimmed and compared without case (an empty username matches another empty one on the same site), password exactly; union-find over shared
+  (username, password, site) so an item with several sites lands in one group; the grouping keys borrow the passwords from the vault state, so no secret is copied. `DuplicateGroup { sites (shared by 2+ copies),
+  username (as the newest copy has it), items: [ItemSummary + urls, hasNotes, customFields, updatedBy] }`, newest first; no password, note text, 2FA secret or custom value in the output (a test serializes it and looks).
+  The site name comes from the new `lp_core::origin::site_key(saved_url, include_subdomains)`: parsed as `match_login` parses (a shared `parse_saved_url`), scheme ignored, lower case, no trailing dot, one leading `www.` dropped, `:port`
+  when not the default, with the option the registrable domain from the public suffix list; IP addresses, `localhost` and single labels keep their host. **Behaviour change in `match_login` (tightening):** `parse_saved_url` no longer
+  prepends `https://` to text that already contains `://`, so a saved `https://` alone is not read as the host `https`.
+  App: command `find_duplicates(include_subdomains)` (`commands.rs`, registered in `lib.rs`, wrapper `api.findDuplicates`), remembered setting `duplicatesIncludeSubdomains` (`settings.rs`, `api.ts`, default false),
+  `screens/Duplicates.tsx` (Shell page `duplicates`, opened by "Find duplicate logins" in a new Settings section "Vault tools"; the Settings tab stays highlighted): a toggle "Count subdomains as the same site", per group a
+  radio list (the newest copy is kept by default) with title, websites, "Changed ... on device" and badges (2FA, Notes, N custom fields, Conflict), and "Move the other copies to trash". It asks first, with the system dialog,
+  when a copy going to the trash has a 2FA secret, notes or more custom fields than the kept one (`lib/duplicates.ts` `lostWithTrash`); otherwise it trashes at once (the Trash can restore). It reloads on `lp-vault-changed`.
+  The screen says "Logins without a website are not checked" (static text; the plan's `Vec` signature has no count).
+  Tests: 12 engine tests in `crates/lp-engine/tests/duplicates.rs` (subdomain vs option, www, different passwords/users/case of the password, username case and spaces, empty usernames, trash/other kinds/no site/no password, IP and ports and localhost,
+  public suffix list incl. github.io, several sites and transitive grouping, newest first and the extras, no secret in the JSON, locked vault), 1 `site_key` test in `origin.rs`, 5 in `app/test/duplicates.test.ts`.
+  Mutation-checked (8 changes made one at a time to `duplicates.rs`/`origin.rs`): 7 caught; the guard `.filter(|p| !p.is_empty())` is not testable through `save_item` (a blank password is stored as no password), it only defends against an
+  empty text written by another device. Checks: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo test --workspace --exclude lp-winauth --no-fail-fast`: 347 pass, 0 fail, 2 ignored (334 + 13);
+  `bunx tsc --noEmit`, `bun run build`, `bun test test/duplicates.test.ts` clean. Android compile of the shared Rust is not run (CI).
+  Checked by the user on 2026-11-01 ("everything works right as expected"). The assisted pass was: import `/tmp/claude-1000/-home-nimda-projects-localpass/eeeb639a-6cc1-4033-a2e8-a6cdfe5963a5/scratchpad/duplicates-seed.csv` into a `LOCALPASS_PROFILE=dev` vault (Settings > Import), then Settings > Find duplicate logins.
+  Expect with the toggle off: two groups, `ann@mail.test` on `example.com` (the root and the www copy) and `admin` on `192.168.1.10` (NAS and NAS again; the :8443 one stays out); with it on: the example.com group gains "Example (sub a)" and a
+  `carl` group on `example.co.uk` appears. Trashing with the root kept must warn about notes (the www copy) and, with the option on, about a 2FA secret (the sub a copy). The other password, other user and "Lonely" logins never appear.
 - [ ] 7.6 Secure files (7.6a spike, b core/store/engine, c sync, d desktop UI, e Android, f security review)
 - [ ] 7.7 Release 0.3.0 (only when the user says so)
 
@@ -122,6 +142,6 @@ Reproduce: `bench.sh` was a throwaway script (warm-up build, `touch`, `time` aro
 
 ## Next (fresh chat)
 
-7.5 (duplicate logins), then 7.6 (the plan's order). On 2026-11-01 the user checked 7.4 (picture paste, file dialog; "all work") and 7.2 (Esc and click outside, after loading the temporary add-on). They also confirmed 7.3 (hide/show) and the 7.2 Unlock side check. On Windows the user then reported that the QR functions of 7.4 work and the `rust-lld.exe` build of 7.1 works, so nothing is open on the user's side except what is noted above. `phase7` is pushed, so the user could fetch it on Windows. On 2026-11-01 Settings > Windows passkeys > Set up failed there with `register failed, hr=0x80090029` (`NTE_NOT_SUPPORTED`; no Phase 7 change touches lp-winauth or the settings page) while the user was connected by Remote Desktop; after working at the PC itself the set-up worked. The user's reading is that Remote Desktop was the cause (not proven; TPM or a Hello PIN was the other guess, never checked). The README now says to do the set-up at the PC itself.
+7.6 (secure files, the large task; plan order). 7.5 is done and the user confirmed the duplicates screen on 2026-11-01. On 2026-11-01 the user checked 7.4 (picture paste, file dialog; "all work") and 7.2 (Esc and click outside, after loading the temporary add-on). They also confirmed 7.3 (hide/show) and the 7.2 Unlock side check. On Windows the user then reported that the QR functions of 7.4 work and the `rust-lld.exe` build of 7.1 works, so nothing is open on the user's side. `phase7` is pushed, so the user could fetch it on Windows. On 2026-11-01 Settings > Windows passkeys > Set up failed there with `register failed, hr=0x80090029` (`NTE_NOT_SUPPORTED`; no Phase 7 change touches lp-winauth or the settings page) while the user was connected by Remote Desktop; after working at the PC itself the set-up worked. The user's reading is that Remote Desktop was the cause (not proven; TPM or a Hello PIN was the other guess, never checked). The README now says to do the set-up at the PC itself.
 
 Facts the plan relies on were checked in the code on 2026-10-31; re-check the ones a task touches (the plan's "Facts" section lists them with file and line).
