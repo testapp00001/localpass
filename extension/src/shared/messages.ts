@@ -30,13 +30,13 @@ export type ToBackground =
   | { kind: "passkeyCreate"; request: PasskeyCreateInput }
   | { kind: "passkeyAssert"; itemId: string; rpId: string; challenge: string; uv: UserVerification }
   /**
-   * Firefox only. A content script asks the user to decide in a LocalPass window (see background/decide.ts)
+   * Firefox only. A content script asks the user to decide in LocalPass UI (see background/decide.ts)
    * and gets the outcome: `PasskeyCreated`, `PasskeyAssertion`, `LoginFill` or `SaveOutcome`. `ref` names
    * the request so the page can withdraw it.
    */
   | { kind: "decide"; ref: string; request: DecisionRequest }
   | { kind: "decideCancel"; ref: string }
-  /** Firefox only, from the decision window itself (`id` names the decision). */
+  /** Firefox only, from the decision window or toolbar panel (`id` names the decision). */
   | { kind: "decisionInfo"; id: string }
   | { kind: "decisionLogins"; id: string }
   | { kind: "decisionCandidates"; id: string }

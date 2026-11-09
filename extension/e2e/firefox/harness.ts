@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const root = resolve(import.meta.dir, "../../..");
 export const extensionDir = resolve(import.meta.dir, "../../dist-firefox-e2e");
@@ -158,6 +159,7 @@ export class FirefoxHarness {
   // ---- Firefox ----
 
   async startFirefox(extDir: string) {
+    const headed = !!this.assisted || process.env.LP_FF_HEADED === "1";
     const profile = join(this.workDir, "profile");
     mkdirSync(profile);
     writeFileSync(
@@ -168,11 +170,13 @@ export class FirefoxHarness {
         'user_pref("app.update.enabled", false);',
         'user_pref("extensions.autoDisableScopes", 0);',
         'user_pref("browser.startup.homepage_override.mstone", "ignore");',
+        // Allow only this run's test actor module through the content-process file sandbox.
+        `user_pref("security.sandbox.content.read_path_whitelist", ${JSON.stringify(join(this.workDir, "PanelActor.sys.mjs"))});`,
       ].join("\n"),
     );
     const port = 9400 + Math.floor(Math.random() * 400);
     this.firefox = Bun.spawn(
-      ["firefox", ...(this.assisted ? [] : ["--headless"]), "--no-remote", "--profile", profile, "--remote-debugging-port", String(port), "--remote-allow-system-access", "about:blank"],
+      ["firefox", ...(headed ? [] : ["--headless"]), "--no-remote", "--profile", profile, "--remote-debugging-port", String(port), "--remote-allow-system-access", "about:blank"],
       {
         env: {
           ...process.env,
@@ -180,13 +184,13 @@ export class FirefoxHarness {
           XDG_CONFIG_HOME: join(this.home, ".config"),
           XDG_DATA_HOME: join(this.home, ".local/share"),
           XDG_CACHE_HOME: join(this.home, ".cache"),
-          ...(this.assisted ? {} : { XDG_RUNTIME_DIR: this.runtime, MOZ_HEADLESS: "1" }),
+          ...(this.assisted ? {} : { XDG_RUNTIME_DIR: this.runtime, ...(headed ? { MOZ_ENABLE_WAYLAND: "0" } : { MOZ_HEADLESS: "1" }) }),
           LOCALPASS_PROFILE: this.profile,
           // Firefox 159 refuses scripts in extension pages unless this variable is set (the flag alone worked in 158).
           MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: "1",
         },
         stdout: "ignore",
-        stderr: "ignore",
+        stderr: process.env.LP_FF_DEBUG ? "inherit" : "ignore",
       },
     );
     for (let i = 0; i < 60 && !this.ws; i++) {
@@ -209,6 +213,25 @@ export class FirefoxHarness {
     await this.send("session.new", { capabilities: {} });
     await this.send("session.subscribe", { events: ["browsingContext.contextCreated", "browsingContext.contextDestroyed"] });
     await this.send("webExtension.install", { extensionData: { type: "path", path: extDir } });
+    // Firefox does not list toolbar popups in BiDi's content tree. A test-only window actor
+    // lets us inspect their real documents through the browser chrome scope instead.
+    const actor = join(this.workDir, "PanelActor.sys.mjs");
+    writeFileSync(actor, `export class LocalPassPanelTestChild extends JSWindowActorChild {
+      async receiveMessage({data}) {
+        const sandbox = Cu.Sandbox(Services.scriptSecurityManager.getSystemPrincipal(), {
+          sandboxPrototype: this.contentWindow.wrappedJSObject, wantXrays: false
+        });
+        return await Cu.evalInSandbox(data, sandbox);
+      }
+    }`);
+    const trees = await this.send("browsingContext.getTree", { "moz:scope": "chrome" });
+    await this.ev(trees.contexts[0].context, `(() => {
+      Services.io.getProtocolHandler("resource").QueryInterface(Ci.nsIResProtocolHandler)
+        .setSubstitution("localpass-test", Services.io.newURI(${JSON.stringify(pathToFileURL(`${this.workDir}/`).href)}));
+      ChromeUtils.registerWindowActor("LocalPassPanelTest", {
+        child: { esModuleURI: "resource://localpass-test/PanelActor.sys.mjs" }, allFrames: true
+      });
+    })()`);
     // The module background connects to the helper and finishes its set-up; the page-side scripts need it.
     await sleep(1500);
   }
@@ -216,13 +239,25 @@ export class FirefoxHarness {
   send(method: string, params: object = {}): Promise<any> {
     const n = ++this.id;
     return new Promise((resolve, reject) => {
-      this.pending.set(n, (m) => (m.type === "error" ? reject(new Error(`${method}: ${m.error} ${m.message}`)) : resolve(m.result)));
+      const timer = setTimeout(() => {
+        this.pending.delete(n);
+        reject(new Error(`timed out: ${method} ${JSON.stringify(params).slice(0, 180)}`));
+      }, 30000);
+      this.pending.set(n, (m) => {
+        clearTimeout(timer);
+        if (m.type === "error") reject(new Error(`${method}: ${m.error} ${m.message}`));
+        else resolve(m.result);
+      });
       this.ws.send(JSON.stringify({ id: n, method, params }));
     });
   }
 
   /** Evaluates in a context (a page, or an extension page thanks to --remote-allow-system-access). */
   async ev<T = unknown>(context: string, expression: string): Promise<T> {
+    if (context.startsWith("panel:")) {
+      const [, owner, id] = context.split(":");
+      return this.ev<T>(owner!, `BrowsingContext.get(${id}).currentWindowGlobal.getActor("LocalPassPanelTest").sendQuery("eval", ${JSON.stringify(expression)})`);
+    }
     const r = await this.send("script.evaluate", { expression, target: { context }, awaitPromise: true });
     if (r.type !== "success") throw new Error(`evaluate failed: ${JSON.stringify(r.exceptionDetails?.text)} in ${expression.slice(0, 80)}`);
     return (r.result.type === "undefined" || r.result.type === "null" ? undefined : r.result.value) as T;
@@ -240,11 +275,24 @@ export class FirefoxHarness {
   }
 
   async closeContext(context: string) {
+    if (context.startsWith("panel:")) {
+      const [, owner, id] = context.split(":");
+      await this.ev(owner!, `[...document.querySelectorAll('browser')].find(b => b.browsingContext?.id === ${id})?.closest('panel')?.hidePopup()`);
+      return;
+    }
     await this.send("browsingContext.close", { context }).catch(() => {});
   }
 
   async contexts(): Promise<Ctx[]> {
-    return (await this.send("browsingContext.getTree", {})).contexts;
+    const contexts: Ctx[] = (await this.send("browsingContext.getTree", {})).contexts;
+    const windows = (await this.send("browsingContext.getTree", { "moz:scope": "chrome" })).contexts;
+    for (const win of windows) {
+      const panels = JSON.parse(await this.ev<string>(win.context, `JSON.stringify([...document.querySelectorAll('browser')]
+        .filter(b => b.currentURI?.spec.includes('decide.html?') && b.currentURI.spec.includes('presentation=panel'))
+        .map(b => ({ context: 'panel:' + ${JSON.stringify(win.context)} + ':' + b.browsingContext.id, url: b.currentURI.spec })))`));
+      contexts.push(...panels);
+    }
+    return contexts;
   }
 
   /** Top-level contexts whose address contains `part` (the decision window is `decide.html`). */
@@ -313,13 +361,15 @@ export class FirefoxHarness {
   async pressKey(context: string, key: "Escape") {
     const value = { Escape: "\uE00C" }[key];
     await this.send("input.performActions", {
-      context,
+      context: context.startsWith("panel:") ? context.split(":")[1] : context,
       actions: [{ type: "key", id: "k", actions: [{ type: "keyDown", value }, { type: "keyUp", value }] }],
     });
   }
 
   /** A click the browser reports as a real one (BiDi input), on the centre of an element found by `rectExpr`. */
   async trustedClick(context: string, rect: { x: number; y: number }) {
+    // A real click cannot target a background tab. BiDi itself does not activate it.
+    await this.send("browsingContext.activate", { context }).catch(() => {});
     await this.send("input.performActions", {
       context,
       actions: [

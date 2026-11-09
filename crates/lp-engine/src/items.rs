@@ -197,6 +197,11 @@ pub(crate) fn input_fields(input: &ItemInput) -> Result<BTreeMap<String, FieldVa
     } else {
         input.kind.trim()
     };
+    if kind == "file" {
+        return Err(EngineError::Invalid(
+            "this item type is no longer supported".into(),
+        ));
+    }
     let mut m = BTreeMap::new();
     m.insert(keys::KIND.to_string(), FieldValue::Text(kind.to_string()));
     m.insert(keys::TITLE.to_string(), FieldValue::Text(title.to_string()));
@@ -406,7 +411,7 @@ pub(crate) fn view(state: &VaultState, item: &ItemState) -> ItemView {
         .into_iter()
         // A passkey's fields are written together by one operation and are not edited by hand; showing
         // them would put the private key in the webview and invite mixing two registrations.
-        .filter(|field| !field.starts_with("passkey."))
+        .filter(|field| !field.starts_with("passkey.") && !field.starts_with("file."))
         .filter_map(|field| {
             let winner = item.winner(field)?;
             let to_value = |e: &lp_core::materialize::FieldEntry| ConflictValue {
@@ -450,6 +455,10 @@ pub(crate) fn view(state: &VaultState, item: &ItemState) -> ItemView {
 }
 
 pub(crate) fn matches(item: &ItemState, q: &ItemQuery) -> bool {
+    // Keep records from the removed development feature on disk, outside the supported UI.
+    if item.text(keys::KIND) == Some("file") {
+        return false;
+    }
     if item.is_trashed() != q.trash {
         return false;
     }

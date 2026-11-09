@@ -1,5 +1,6 @@
 // Firefox only: the decisions the in-page controls make in Chrome (choose a login, save a login,
-// create a passkey, sign in with one) are made in a window that belongs to the extension.
+// create a passkey, sign in with one) are made in extension-owned UI. Login picking uses the
+// toolbar panel on Firefox 149+, and other decisions (and older Firefox) use separate windows.
 //
 // Why: Firefox cannot prove that a click on a control drawn into a page could be seen (no
 // IntersectionObserver `isVisible`), so a page could hide or cover such a control. This window is
@@ -8,8 +9,8 @@
 // Who is trusted with what:
 // * The site comes from the browser's report for the asking frame (`Asker`, built by index.ts from
 //   `sender`), never from the request. The window only shows it and answers by decision id.
-// * Only the window this module opened may answer (its URL, its id in the URL and its window id are
-//   checked on every message), and only with an answer that fits the decision.
+// * Only the UI this module opened may answer: exact URL and request id, plus the created window
+//   id or the active tab in the focused panel window. It may only answer its own decision.
 // * Secrets go to the asking content script as the reply to its own `decide` message, not to the
 //   window: the window learns whether it worked, nothing more.
 // * One window per tab: a newer request from the tab replaces the older one.
@@ -42,7 +43,7 @@ export interface Asker {
   origin: string;
 }
 
-/** The most decision windows open at once (across tabs). */
+/** The most decisions open at once (across tabs). */
 const MAX_OPEN = 8;
 /** How long a result stays on screen before the window closes. */
 const LINGER_MS = 1800;
@@ -62,6 +63,8 @@ interface Decision extends Asker {
   username: string;
   windowId: number | undefined;
   windowReady: Promise<void>;
+  panel: boolean;
+  port?: chrome.runtime.Port;
   resolve(value: unknown): void;
   reject(error: unknown): void;
   settled: boolean;
@@ -74,10 +77,55 @@ const cancelled = () => new BrokerError("cancelled", "The user cancelled the req
 
 export class Decisions {
   private byId = new Map<string, Decision>();
+  // Serialize popup changes so cleanup of a replaced request cannot erase its successor.
+  private popupQueue: Promise<unknown> = Promise.resolve();
+
+  private popupChange<T>(action: () => Promise<T>): Promise<T> {
+    const next = this.popupQueue.then(action);
+    this.popupQueue = next.catch(() => {});
+    return next;
+  }
+
+  private panelURL(d: Decision): string {
+    return chrome.runtime.getURL(`${PAGE}?id=${d.id}&presentation=panel`);
+  }
+
+  private async checkPanelTab(d: Decision): Promise<void> {
+    const tab = await chrome.tabs.get(d.tabId);
+    const win = await chrome.windows.get(tab.windowId);
+    if (d.settled || !tab.active || !win.focused || tab.windowId !== d.windowId || new URL(tab.url ?? "").origin !== d.origin) {
+      throw new BrokerError("cancelled", "The page is no longer active. Try again from the login field.");
+    }
+  }
+
+  private async present(d: Decision): Promise<void> {
+    if (d.spec.decision === "chooseLogin") {
+      const runtime = chrome.runtime as typeof chrome.runtime & { getBrowserInfo?: () => Promise<{ version: string }> };
+      if (runtime.getBrowserInfo) {
+        const info = await runtime.getBrowserInfo();
+        d.panel = Number.parseInt(info.version, 10) >= 149;
+      }
+    }
+    if (d.settled) return;
+    if (d.panel) {
+      const tab = await chrome.tabs.get(d.tabId);
+      d.windowId = tab.windowId;
+      await this.popupChange(async () => {
+        await this.checkPanelTab(d);
+        await chrome.action.setPopup({ tabId: d.tabId, popup: this.panelURL(d) });
+        await this.checkPanelTab(d);
+        await chrome.action.openPopup({ windowId: d.windowId });
+      });
+    } else {
+      const w = await chrome.windows.create({ url: chrome.runtime.getURL(`${PAGE}?id=${d.id}`), type: "popup", width: 440, height: 600 });
+      if (w?.id === undefined) throw new Error("the window has no id");
+      d.windowId = w.id;
+    }
+  }
 
   constructor(private deps: Deps) {}
 
-  /** Opens the window and resolves with the outcome (or rejects with the reason it did not happen). */
+  /** Opens protected UI and resolves with the outcome (or rejects with the reason it did not happen). */
   async open(asker: Asker, ref: string, spec: DecisionRequest): Promise<unknown> {
     let username = "";
     if (spec.decision === "saveLogin") {
@@ -86,7 +134,7 @@ export class Decisions {
       if (!pending) throw new BrokerError("notFound", "there is nothing to save any more");
       username = pending.username;
     }
-    // One window per tab (and per page request): the newer request wins.
+    // One decision per tab (and per page request): the newer request wins.
     for (const old of [...this.byId.values()]) {
       if (old.tabId === asker.tabId) this.cancel(old, new BrokerError("cancelled", "Replaced by a newer request."));
     }
@@ -101,6 +149,7 @@ export class Decisions {
         username,
         windowId: undefined,
         windowReady: Promise.resolve(),
+        panel: false,
         resolve,
         reject,
         settled: false,
@@ -108,14 +157,9 @@ export class Decisions {
         lastError: undefined,
       };
       this.byId.set(id, d);
-      d.windowReady = chrome.windows
-        .create({ url: chrome.runtime.getURL(`${PAGE}?id=${id}`), type: "popup", width: 440, height: 600 })
-        .then((w) => {
-          if (w?.id === undefined) throw new Error("the window has no id");
-          d.windowId = w.id;
-        });
+      d.windowReady = this.present(d);
       // (A request that ends while its window is still opening closes the window in `close`.)
-      d.windowReady.catch((e) => this.finish(d, { error: new BrokerError("error", `could not open the LocalPass window (${String(e)})`) }));
+      d.windowReady.catch((e) => this.finish(d, { error: new BrokerError("error", `Could not open the LocalPass picker. Use the LocalPass toolbar icon to pick a login. (${String(e)})`) }));
     });
     return outcome;
   }
@@ -135,12 +179,34 @@ export class Decisions {
     for (const d of [...this.byId.values()]) if (d.tabId === tabId) this.cancel(d);
   }
 
-  /** The window's keep-alive port: closing the window (or the port) is "no". */
+  onTabUpdated(tabId: number, change: { url?: string; status?: string }) {
+    if (!change.url && change.status !== "loading") return;
+    for (const d of [...this.byId.values()]) if (d.panel && d.tabId === tabId) this.cancel(d);
+  }
+
+  onTabActivated(info: { tabId: number; windowId: number }) {
+    for (const d of [...this.byId.values()]) if (d.panel && d.windowId === info.windowId && d.tabId !== info.tabId) this.cancel(d);
+  }
+
+  onFocusChanged(windowId: number) {
+    for (const d of [...this.byId.values()]) if (d.panel && d.windowId !== windowId) this.cancel(d);
+  }
+
+  /** The UI's port: closing the window, panel or port is "no". */
   async attach(port: chrome.runtime.Port): Promise<void> {
     const id = port.name.startsWith("decide:") ? port.name.slice("decide:".length) : "";
+    let disconnected = false;
+    let attached: Decision | undefined;
+    port.onDisconnect.addListener(() => {
+      disconnected = true;
+      if (attached) this.cancel(attached);
+    });
     try {
       const d = await this.authorize(port.sender, id);
-      port.onDisconnect.addListener(() => this.cancel(d));
+      if (d.port) throw new BrokerError("forbidden", "the picker is already attached");
+      attached = d;
+      d.port = port;
+      if (disconnected) this.cancel(d);
     } catch {
       port.disconnect();
     }
@@ -218,6 +284,8 @@ export class Decisions {
     }
     if (answer.action === "fill" && spec.decision === "chooseLogin") {
       const fill = await this.deps.request<LoginFill>("fillLogin", { itemId: answer.itemId, origin: d.origin, force: false });
+      if (d.panel) await this.checkPanelTab(d);
+      if (d.settled) throw cancelled();
       await this.deps.rememberFill(d.tabId, fill);
       return { value: fill };
     }
@@ -243,6 +311,17 @@ export class Decisions {
 
   private async close(d: Decision, lingerMs: number) {
     await d.windowReady.catch(() => {});
+    if (d.panel) {
+      // Disconnect closes the panel through its own script, never its browser window.
+      d.port?.disconnect();
+      await this.popupChange(async () => {
+        if (await chrome.action.getPopup({ tabId: d.tabId }) === this.panelURL(d)) {
+          // Firefox accepts null to remove the per-tab override (Chrome's typings omit null).
+          await chrome.action.setPopup({ tabId: d.tabId, popup: null as unknown as string });
+        }
+      }).catch(() => {}); // The tab may already have closed.
+      return;
+    }
     if (d.windowId === undefined) return;
     const windowId = d.windowId;
     const remove = () => void chrome.windows.remove(windowId).catch(() => {});
@@ -250,24 +329,22 @@ export class Decisions {
     else remove();
   }
 
-  /** Only the page this module opened, in the window it opened, may use a decision. */
+  /** Only the exact extension page in the authorized window or panel may use a decision. */
   private async authorize(sender: chrome.runtime.MessageSender | undefined, id: string): Promise<Decision> {
     if (!sender || sender.id !== chrome.runtime.id) throw new BrokerError("forbidden", "unknown sender");
     const d = this.byId.get(id);
     if (!d) throw new BrokerError("notFound", "this request is no longer open");
     // The page's own address with its query: nothing else on the extension (the popup) or a lookalike path.
-    const base = chrome.runtime.getURL(PAGE);
     const url = sender.url ?? "";
-    if (!url.startsWith(`${base}?`)) throw new BrokerError("forbidden", "not the LocalPass window");
-    let urlId: string | null = null;
-    try {
-      urlId = new URL(url).searchParams.get("id");
-    } catch {
-      // not an address
-    }
-    if (urlId !== id) throw new BrokerError("forbidden", "not the LocalPass window");
+    const expected = d.panel ? this.panelURL(d) : chrome.runtime.getURL(`${PAGE}?id=${id}`);
+    if (url !== expected) throw new BrokerError("forbidden", "not the LocalPass picker");
     await d.windowReady.catch(() => {});
-    if (d.windowId === undefined || sender.tab?.windowId !== d.windowId) throw new BrokerError("forbidden", "not the LocalPass window");
+    if (d.settled) throw cancelled();
+    if (d.panel) {
+      // Toolbar popups have no sender.tab. An extension tab or embedded frame is not a panel.
+      if (sender.tab || sender.frameId !== undefined) throw new BrokerError("forbidden", "not the LocalPass panel");
+      await this.checkPanelTab(d);
+    } else if (d.windowId === undefined || sender.tab?.windowId !== d.windowId) throw new BrokerError("forbidden", "not the LocalPass window");
     return d;
   }
 }

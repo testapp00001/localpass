@@ -1,5 +1,7 @@
 /* The decision window (Firefox): the popup's look, as a window of its own. */
 body { width: auto; }
+body.panel { width: 360px; }
+body.panel main { max-height: 480px; overflow: auto; }
 header #site { max-width: none; }
 main { max-height: none; padding: 16px; }
 .lead { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }

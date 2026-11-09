@@ -12,7 +12,7 @@ provider) are done. Phase 5 (hardening and release builds) is in progress: 5.1 (
 "RESUME HERE"**: it has the exact next steps, the machine state, the rules for keeping sessions
 small and cheap, and the environment facts. Do not rely on conversation history for state.
 Phase 6 (LocalPass on Fedora Linux + Firefox, plan `docs/plans/2026-10-28-phase6-linux.md`) is done: v0.2.2 was tested and approved by the user on 2026-10-31; its state, report and the few optional open items are in `docs/handoff-phase6-linux.md`, and its security review is `docs/phase6-security-review.md`.
-**Phase 7 (secure files, vault tools, faster builds; plan `docs/plans/2026-10-31-phase7-files-tools-builds.md`) is in progress: its state is `docs/handoff-phase7.md`, section "RESUME HERE"** (tasks 7.0-7.7, one task per fresh chat).
+**Phase 7 (secure files, vault tools, faster builds; plan `docs/plans/2026-10-31-phase7-files-tools-builds.md`) is in progress: its state is `docs/handoff-phase7.md`, section "RESUME HERE"** (7.0-7.5 done; secure-file storage 7.6 was removed at the user’s request on 2026-11-09; release 7.7 only when requested).
 All plans, past and open, with their status: `docs/plans/README.md`.
 
 ## Working with agents

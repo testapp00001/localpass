@@ -408,6 +408,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 if (__FIREFOX__) {
   chrome.windows.onRemoved.addListener((windowId) => decisions.onWindowRemoved(windowId));
-  // The decision window keeps a port open: it keeps the event page alive while the user decides.
+  chrome.windows.onFocusChanged.addListener((windowId) => decisions.onFocusChanged(windowId));
+  chrome.tabs.onUpdated.addListener((tabId, change) => decisions.onTabUpdated(tabId, change));
+  chrome.tabs.onActivated.addListener((info) => decisions.onTabActivated(info));
+  // The decision UI's port reports dismissal; its periodic messages keep the event page alive.
   chrome.runtime.onConnect.addListener((port) => void decisions.attach(port));
 }

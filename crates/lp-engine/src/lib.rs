@@ -645,6 +645,11 @@ impl Engine {
                 .items
                 .get(&id)
                 .ok_or_else(|| EngineError::NotFound("item".into()))?;
+            if item.text(fkeys::KIND) == Some("file") {
+                return Err(EngineError::Invalid(
+                    "this item type is no longer supported".into(),
+                ));
+            }
             Ok(items::view(&s.state, item))
         })
     }
@@ -661,6 +666,11 @@ impl Engine {
                         .items
                         .get(&id)
                         .ok_or_else(|| EngineError::NotFound("item".into()))?;
+                    if cur.text(fkeys::KIND) == Some("file") {
+                        return Err(EngineError::Invalid(
+                            "this item type is no longer supported".into(),
+                        ));
+                    }
                     (id, items::diff(cur, desired))
                 }
                 None => (
@@ -809,6 +819,9 @@ impl Engine {
 
     /// Secret value of a field for copying (`totp` yields the current code).
     pub fn field_secret(&self, id: &str, field: &str) -> Result<Zeroizing<String>> {
+        if field == "file.key" {
+            return Err(EngineError::Invalid("this field cannot be copied".into()));
+        }
         if field == fkeys::PASSKEY_PRIVATE_KEY {
             // Only a backup carries it (see import_export.rs); the interface never copies it.
             return Err(EngineError::Invalid(
@@ -1487,4 +1500,98 @@ fn check_password(password: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod legacy_items_tests {
+    use super::*;
+
+    #[test]
+    fn removed_file_records_stay_private_and_are_not_destroyed() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_content = dir.path().join("files");
+        std::fs::create_dir(&old_content).unwrap();
+        std::fs::write(old_content.join("legacy-blob"), b"sealed content").unwrap();
+        let mut config = EngineConfig::new(dir.path(), "test");
+        config.kdf = KdfParams::insecure_for_tests();
+        let engine = Engine::open(
+            config,
+            Arc::new(FileSecretStore::new(dir.path().join("device.key"))),
+        )
+        .unwrap();
+        engine.create_vault("test master pw", "Test").unwrap();
+        // Model a record written by the former development build, without its removed APIs.
+        let id = ItemId::random().unwrap();
+        engine
+            .with_session(|s, ctx| {
+                let hlc = s.clock.tick(now_ms());
+                Engine::write_data(
+                    s,
+                    ctx,
+                    DataOp::ItemSet {
+                        item: id,
+                        hlc,
+                        fields: [
+                            (fkeys::KIND, "file"),
+                            (fkeys::TITLE, "Legacy document"),
+                            ("file.key", "private key"),
+                        ]
+                        .into_iter()
+                        .map(|(key, value)| FieldSet {
+                            key: key.into(),
+                            value: FieldValue::Text(value.into()),
+                            base: None,
+                        })
+                        .collect(),
+                    },
+                )
+            })
+            .unwrap();
+        assert!(engine.list_items(&ItemQuery::default()).unwrap().is_empty());
+        assert!(engine.export_items(false).unwrap().is_empty());
+        assert!(engine.export_items(true).unwrap().is_empty());
+        assert!(engine.get_item(&id.to_string()).is_err());
+        assert!(engine.field_secret(&id.to_string(), "file.key").is_err());
+        assert!(fkeys::is_secret("file.key"));
+        assert!(
+            engine
+                .save_item(&ItemInput {
+                    kind: "file".into(),
+                    title: "New file".into(),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert!(
+            engine
+                .save_item(&ItemInput {
+                    id: Some(id.to_string()),
+                    title: "Overwrite".into(),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        engine.trash_item(&id.to_string()).unwrap();
+        assert!(
+            engine
+                .list_items(&ItemQuery {
+                    trash: true,
+                    ..Default::default()
+                })
+                .unwrap()
+                .is_empty()
+        );
+        engine.lock();
+        engine.unlock("test master pw").unwrap();
+        engine
+            .with_session(|s, _| {
+                assert!(s.state.items.contains_key(&id));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            std::fs::read(old_content.join("legacy-blob")).unwrap(),
+            b"sealed content"
+        );
+    }
 }

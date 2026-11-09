@@ -11,7 +11,7 @@ import { type LoginForm, findLoginForms, setValue } from "./detect";
 import { conditionalCandidates, conditionalPending, installPasskeyBridge, passkeyRow } from "./passkeys";
 import { type MenuRow, hideBadge, hideBar, hideMenu, showBadge, showMenu, showSaveBar } from "./ui";
 
-/** Set by `bun run build --firefox`: there the user chooses and confirms in a LocalPass window, not in the page. */
+/** Set by `bun run build --firefox`: choosing and confirming use extension-owned UI. */
 declare const __FIREFOX__: boolean;
 
 // Listen for the page's passkey requests from the very start (this script runs at document_start).
@@ -50,12 +50,19 @@ function bestForm(): LoginForm | undefined {
 
 // ---- the badge and menu ----
 
-/** Firefox: the badge opens a LocalPass window; the chosen login comes back here to be filled. */
-async function chooseInWindow(form: LoginForm): Promise<void> {
+/** Firefox: the badge opens the protected picker; its answer fills this particular form. */
+async function chooseInPicker(form: LoginForm): Promise<void> {
+  const ref = crypto.randomUUID();
+  const origin = location.origin;
+  const withdraw = () => void ask({ kind: "decideCancel", ref }).catch(() => {});
+  window.addEventListener("pagehide", withdraw, { once: true });
   try {
-    applyFill(form, await ask<LoginFill>({ kind: "decide", ref: crypto.randomUUID(), request: { decision: "chooseLogin" } }));
+    const fill = await ask<LoginFill>({ kind: "decide", ref, request: { decision: "chooseLogin" } });
+    if (location.origin === origin && form.root.isConnected) applyFill(form, fill);
   } catch {
-    // Cancelled, or the window told the user what is wrong.
+    // Cancelled, or unavailable. The normal toolbar popup remains available.
+  } finally {
+    window.removeEventListener("pagehide", withdraw);
   }
 }
 
@@ -136,7 +143,7 @@ function onFocus(field: HTMLInputElement, form: LoginForm): void {
       if (document.activeElement !== field) return;
       const useful = reply.status === "ok" && (reply.logins.length > 0 || form.isNewPassword || conditionalPending());
       // Muted when LocalPass can't help yet (locked or not connected); the click explains why.
-      showBadge(field, !useful, () => void (__FIREFOX__ ? chooseInWindow(form) : openMenu(field, form)));
+      showBadge(field, !useful, () => void (__FIREFOX__ ? chooseInPicker(form) : openMenu(field, form)));
     })
     .catch(() => {});
 }

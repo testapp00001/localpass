@@ -14,18 +14,20 @@ let savedUrl = "";
 
 const happy = () => (window as unknown as { happyDOM: { setURL(u: string): void } }).happyDOM;
 
-async function openPage(info: Json, extra: Record<string, (message: Json) => unknown> = {}) {
+let disconnectPanel: (() => void) | undefined;
+async function openPage(info: Json, extra: Record<string, (message: Json) => unknown> = {}, panel = false) {
   installChrome();
   sent = [];
   answers = { decisionInfo: () => ({ ok: true, data: info }), ...extra };
   const chromeApi = (globalThis as unknown as { chrome: { runtime: Json } }).chrome;
-  chromeApi.runtime.connect = () => ({});
+  disconnectPanel = undefined;
+  chromeApi.runtime.connect = () => ({ onDisconnect: { addListener: (fn: () => void) => { disconnectPanel = fn; } } });
   chromeApi.runtime.sendMessage = async (message: Json) => {
     sent.push(message);
     return answers[message.kind as string]?.(message) ?? { ok: true, data: {} };
   };
   document.body.innerHTML = HTML;
-  happy().setURL("moz-extension://uuid/decide.html?id=abc");
+  happy().setURL(`moz-extension://uuid/decide.html?id=abc${panel ? "&presentation=panel" : ""}`);
   await import(`../src/decide/index.ts?page=${copies++}`);
   await sleep(10);
 }
@@ -71,6 +73,42 @@ const CREATE_INFO = {
   host: "login.example.com",
   request: { rpId: "example.com", rpName: "<img src=x onerror=alert(1)>", userName: "alice", userDisplayName: "Alice", userHandle: "AA", challenge: "AAAA", algorithms: [-7], exclude: [], uv: "preferred" },
 };
+
+describe("toolbar panel lifecycle", () => {
+  test("uses a bounded panel layout and closes when its background port ends", async () => {
+    const saved = window.close;
+    let closed = 0;
+    window.close = () => { closed++; };
+    try {
+      await openPage({ decision: "chooseLogin", host: "example.com", origin: "https://example.com" }, {
+        decisionLogins: () => ({ ok: true, data: { status: "ok", logins: [] } }),
+      }, true);
+      expect(document.body.classList.contains("panel")).toBe(true);
+      expect(main().textContent).toContain("No saved logins");
+      disconnectPanel!();
+      expect(closed).toBe(1);
+    } finally {
+      window.close = saved;
+    }
+  });
+
+  test("a successful choice closes the panel without exposing any credential in the page", async () => {
+    const saved = window.close;
+    let closed = 0;
+    window.close = () => { closed++; };
+    try {
+      await openPage({ decision: "chooseLogin", host: "example.com", origin: "https://example.com" }, {
+        decisionLogins: () => ({ ok: true, data: { status: "ok", logins: [{ id: "i1", title: "Example", username: "alice" }] } }),
+      }, true);
+      await until(() => !!main().querySelector(".row"));
+      (main().querySelector(".row") as HTMLButtonElement).click();
+      await until(() => closed === 1);
+      expect(sent.at(-1)).toEqual({ kind: "decisionAnswer", id: "abc", answer: { action: "fill", itemId: "i1" } });
+    } finally {
+      window.close = saved;
+    }
+  });
+});
 
 describe("create a passkey", () => {
   test("names the verified site first, shows page text only as text, and asks for the decision by its id", async () => {

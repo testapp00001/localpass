@@ -163,9 +163,9 @@ function arm(control: HTMLElement, action: () => void): Armed {
 
 /**
  * Firefox cannot report visibility, so `arm` would keep a control inert forever. The only control
- * drawn into pages there is the badge, and its click merely asks the background to open a LocalPass
- * window, where the user decides (see background/decide.ts); a click a script made up is still ignored
- * and the background allows one such window per tab. Never use this for a control that acts by itself.
+ * drawn into pages there is the badge, and its click merely asks the background to open the protected
+ * picker, where the user decides (see background/decide.ts); a click a script made up is still ignored
+ * and the background allows one such request per tab. Never use this for a control that acts by itself.
  */
 function armOpener(control: HTMLElement, action: () => void): Armed {
   const state: Armed = { control, ready: true, timer: undefined, movedAt: 0 };

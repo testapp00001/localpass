@@ -238,10 +238,12 @@ The same extension, built for Firefox, works with the Fedora app. Chrome and Chr
 3. Click the LocalPass icon in the toolbar and choose **Connect**; approve it in the app after comparing the code.
 
 Firefox cannot prove that a button drawn into a page was visible to you, so LocalPass never lets a page-drawn
-button act. The badge in a login field only opens a **separate LocalPass window** (an extension window that
-the page cannot touch), and that is where you choose a login to fill, say Save or Not now to a new login,
-create a passkey or pick one to sign in with. The window shows the site Firefox reported, never the password,
-and its buttons stay disabled for a moment after it appears or you come back to it, so a key you were
+button fill a password directly. On Firefox 149 and newer, the badge in a login field opens a **LocalPass
+toolbar panel** where you choose a login to fill. Esc, clicking outside, changing tabs or navigating closes
+the panel without filling. If Unlock moves focus to the app, reopen the picker after unlocking.
+Older Firefox versions use a separate LocalPass window for choosing a login. Save prompts and passkey
+decisions still use separate windows on every Firefox version. These extension-owned views show the site
+Firefox reported, never the password, and their buttons stay disabled for a moment after appearing or regaining focus, so a key you were
 already pressing cannot choose for you. What Firefox does not get: a menu inside the username field,
 passkey sign-in from that field (Firefox's own flow handles those requests) and the "generate a strong
 password" row. Where Windows asks for Windows Hello, LocalPass on Linux asks for your master password in a
@@ -426,8 +428,9 @@ notification.
   history is honoured by KDE's Klipper and similar tools, but GNOME clipboard-history extensions usually ignore it.
 - **Firefox: the badge in a login field is not proof that you saw it.** Firefox cannot tell LocalPass whether a
   button was visible, so a page that covers the badge with a see-through layer can get your click on it. That click
-  only opens the separate LocalPass window, which shows the site Firefox reported; nothing is filled, saved or
-  created until you click a choice inside that window. A page can also open that window by itself when it asks
+  only opens the LocalPass toolbar panel (a separate window on Firefox below 149), which shows the site Firefox
+  reported; nothing is filled until you choose a login there. Saving and passkey decisions use separate
+  LocalPass windows. A page can also open a window by itself when it asks
   for a passkey (at most one window per tab and eight in all); Cancel closes it. The Firefox add-on is signed by
   Mozilla but not published there, and Firefox does not update it: install each new `.xpi` yourself.
 - On Fedora the "Confirm it is you" check is your master password, in a dialog in the app (five wrong tries

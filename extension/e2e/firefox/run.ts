@@ -8,7 +8,7 @@
 // run covers both. SLOW=1 adds a wait of over a minute inside a decision window.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startRelyingParty } from "../rp";
 import { FirefoxHarness, extensionDir, shippedDir, sleep } from "./harness";
@@ -48,6 +48,7 @@ const server = Bun.serve({
     // A frame whose origin is opaque (CSP sandbox): Firefox reports origin "null" and LocalPass must refuse it.
     if (url.pathname === "/sandboxed") return new Response(loginPage("Sandboxed"), { headers: { ...html, "content-security-policy": "sandbox allow-scripts allow-forms" } });
     if (url.pathname === "/plainframe") return new Response(`<!doctype html><title>Plain frame</title><iframe src="/login" width="500" height="200"></iframe>`, { headers: html });
+    if (url.pathname === "/crossframe") return new Response(`<!doctype html><title>Cross-origin frame</title><iframe src="http://127.0.0.1:${url.port}/login" width="500" height="200"></iframe>`, { headers: html });
     if (url.pathname === "/framed") return new Response(`<!doctype html><title>Framed</title><iframe src="/sandboxed" width="500" height="200"></iframe>`, { headers: html });
     return new Response("not found", { status: 404 });
   },
@@ -124,6 +125,20 @@ try {
   await h.trustedClick(login, ready);
   win = await h.decisionWindow();
   const list = await h.waitWindowText(win, /Fill a login/);
+  check("password picking uses the toolbar panel", win.startsWith("panel:"));
+  check("password picking creates no additional browser window", await h.ev<number>(popup, "chrome.windows.getAll().then(w => w.length)") === 1);
+  if (process.env.LP_FF_SCREENSHOT) {
+    // Browser-window screenshots omit native popup surfaces. Capture the panel's compositor snapshot.
+    const [, owner, id] = win.split(":");
+    const shot = await h.ev<string>(owner!, `(async () => {
+      const bitmap = await BrowsingContext.get(${id}).currentWindowGlobal.drawSnapshot(null, 1, 'white');
+      const canvas = document.createElementNS('http://www.w3.org/1999/xhtml', 'canvas');
+      canvas.width = bitmap.width; canvas.height = bitmap.height;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0); bitmap.close();
+      return canvas.toDataURL().split(',')[1];
+    })()`);
+    writeFileSync(process.env.LP_FF_SCREENSHOT, Buffer.from(shot, "base64"));
+  }
   check("the window shows the site the browser reported and the saved login", /^localhost \|.*Fill a login for localhost.*Local site.*alice/.test(list), list);
   check("the window never carries the password", !list.includes("alice-secret"));
   check("one window is open", (await h.find("decide.html")).length === 1);
@@ -155,10 +170,71 @@ try {
   check("the username is filled", (await h.ev<string>(login, "document.getElementById('u').value")) === "alice");
   check("the password is filled", (await h.ev<string>(login, "document.getElementById('p').value")) === "alice-secret");
   check("the window closes after a fill", await h.windowGone(win));
+  check("the original tab's normal toolbar popup is restored", await h.ev<boolean>(popup, `chrome.tabs.query({active:true,currentWindow:true}).then(async tabs => (await chrome.action.getPopup({tabId:tabs[0].id})) === chrome.runtime.getURL('popup.html'))`));
 
   // 3. A login that LocalPass filled is not offered for saving again.
   await h.ev(login, "document.getElementById('login').requestSubmit()");
   await noWindow("signing in with a filled login does not offer to save it", 3000);
+
+  const openPicker = async (tab: string) => {
+    await h.send("browsingContext.activate", { context: tab });
+    await h.ev(tab, "document.getElementById('u').focus()");
+    const rect = await h.waitFor("a picker badge on the username field", async () => {
+      const b = await h.badgeRect(tab);
+      const field = JSON.parse(await h.ev<string>(tab, "JSON.stringify(document.getElementById('u').getBoundingClientRect())"));
+      return b && b.x >= field.left && b.x <= field.right && b.y >= field.top && b.y <= field.bottom ? b : false;
+    });
+    await h.trustedClick(tab, rect);
+    const picker = await h.decisionWindow();
+    await h.waitWindowText(picker, /Fill a login/);
+    return picker;
+  };
+  const target = await h.newTab(`${site}/login`);
+  await h.ev(target, `document.body.insertAdjacentHTML('beforeend', '<form><input id="other-user" autocomplete="username" value="untouched"><input type="password" id="other-password" value="untouched"></form>')`);
+  let picker = await openPicker(target);
+  await h.clickWindow(picker, /^Local site/);
+  await h.waitFor("targeted fill", async () => await h.ev<boolean>(target, "document.getElementById('p').value === 'alice-secret'"));
+  check("only the form whose badge was clicked is filled", await h.ev<boolean>(target, "document.getElementById('other-user').value === 'untouched' && document.getElementById('other-password').value === 'untouched'"));
+  await h.ev(target, "document.getElementById('u').value = '', document.getElementById('p').value = ''");
+  picker = await openPicker(target);
+  // BiDi routes page clicks directly to content and bypasses Firefox's native popup dismissal.
+  // Use the native panel's hidePopup path (the same destruction as clicking outside).
+  await h.closeContext(picker);
+  await h.clickElement(target, "#p");
+  check("native panel dismissal cancels the toolbar picker", await h.windowGone(picker));
+  check("clicking outside fills nothing", await h.ev<boolean>(target, "document.getElementById('p').value === ''"));
+  picker = await openPicker(target);
+  await h.newTab(`${site}/login`);
+  check("changing tabs cancels the picker", await h.windowGone(picker));
+  check("changing tabs fills nothing", await h.ev<boolean>(target, "document.getElementById('p').value === ''"));
+  picker = await openPicker(target);
+  await h.send("browsingContext.navigate", { context: target, url: `${site}/login?new-document`, wait: "complete" });
+  check("navigation cancels the picker", await h.windowGone(picker));
+  check("the new document receives no stale fill", await h.ev<boolean>(target, "document.getElementById('p').value === ''"));
+  picker = await openPicker(target);
+  const otherWindow = await h.send("browsingContext.create", { type: "window" });
+  await h.send("browsingContext.navigate", { context: otherWindow.context, url: `${site}/login`, wait: "complete" });
+  await h.send("browsingContext.activate", { context: otherWindow.context });
+  check("switching browser windows dismisses the old picker", await h.windowGone(picker));
+  const otherPicker = await openPicker(otherWindow.context);
+  check("a second browser window uses its own toolbar panel", otherPicker.startsWith("panel:") && otherPicker.split(":")[1] !== picker.split(":")[1]);
+  await h.clickWindow(otherPicker, /^Local site/);
+  await h.waitFor("second window fill", async () => await h.ev<boolean>(otherWindow.context, "document.getElementById('p').value === 'alice-secret'"));
+  check("filling in a second browser window leaves the first untouched", await h.ev<boolean>(target, "document.getElementById('p').value === ''"));
+  await h.closeContext(otherWindow.context);
+  await h.send("browsingContext.activate", { context: target });
+  h.hostCommand("lock");
+  await h.waitForHost(l => l === "LOCKED");
+  await h.ev(target, "document.getElementById('u').focus()");
+  await h.trustedClick(target, await h.waitFor("locked badge", async () => (await h.badgeRect(target)) ?? false));
+  picker = await h.decisionWindow();
+  check("the toolbar picker reports a locked vault", /LocalPass is locked/.test(await h.waitWindowText(picker, /locked/)));
+  await h.clickWindow(picker, "Unlock");
+  // The fake host unlocks without moving focus; a real app taking focus dismisses the panel.
+  await h.waitWindowText(picker, /Fill a login/);
+  await h.clickWindow(picker, "Cancel");
+  check("unlocking alone never fills a login", await h.ev<boolean>(target, "document.getElementById('p').value === ''"));
+  await h.closeContext(target);
 
   // 3b. Decoys. Firefox has no proof that a badge could be seen (no IntersectionObserver `isVisible`), so the badge only needs a
   // real click (`armOpener`): a page that hides or covers it can still get that click, and the result is a window that shows the
@@ -247,6 +323,19 @@ try {
   await h.ev(plain!.context, "document.getElementById('u').focus()");
   const plainBadge = await h.waitFor("the badge in a same-site frame", async () => (await h.badgeRect(plain!.context)) ?? false).catch(() => undefined);
   check("control: a login form in a frame of the same site gets the badge", !!plainBadge);
+  if (plainBadge) {
+    await h.trustedClick(plain!.context, plainBadge);
+    const framePicker = await h.decisionWindow();
+    await h.waitWindowText(framePicker, /Fill a login/);
+    await h.clickWindow(framePicker, /^Local site/);
+    await h.waitFor("same-origin frame fill", async () => await h.ev<boolean>(plain!.context, "document.getElementById('p').value === 'alice-secret'"));
+    check("the toolbar picker fills the requesting same-origin frame", true);
+  }
+  const cross = await h.newTab(`${site}/crossframe`);
+  const crossChild = (await h.contexts()).find(c => c.context === cross)?.children?.[0];
+  await h.ev(crossChild!.context, "document.getElementById('u').focus()");
+  await sleep(1000);
+  check("cross-origin frames receive no badge or credential", !(await h.badgeRect(crossChild!.context)) && await h.ev<boolean>(crossChild!.context, "document.getElementById('p').value === ''"));
   const sandboxTab = await h.newTab(`${site}/framed`);
   const sandboxed = (await h.contexts()).find((c) => c.context === sandboxTab)?.children?.[0];
   await h.ev(sandboxed!.context, "document.getElementById('u').focus()");

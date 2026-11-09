@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { type Deps, Decisions } from "../src/background/decide";
 import type { DecisionRequest } from "../src/shared/messages";
 import { BrokerError } from "../src/shared/protocol";
-import { installChrome, installWindows, sleep, until } from "./chrome";
+import { FakePort, installChrome, installWindows, sleep, until } from "./chrome";
 
 const EXT = "khlgdnhadbjfghhonaohnhdmedgnenlc";
 const ORIGIN = "https://login.example.com";
@@ -252,5 +252,181 @@ describe("giving up", () => {
     expect(windows.removed).toEqual([]);
     decisions.withdraw(asker(), "r1");
     await expect(a.outcome).rejects.toMatchObject({ code: "cancelled" });
+  });
+});
+
+describe("Firefox toolbar picker", () => {
+  let tab: { id: number; windowId: number; active: boolean; url: string };
+  let focused: boolean;
+  let popup: string;
+  let opened: number[];
+  let failOpen: boolean;
+  let popupGate: Promise<void> | undefined;
+
+  beforeEach(() => {
+    tab = { id: 7, windowId: 20, active: true, url: `${ORIGIN}/login` };
+    focused = true;
+    popup = chrome.runtime.getURL("popup.html");
+    opened = [];
+    failOpen = false;
+    popupGate = undefined;
+    Object.assign(chrome.runtime, { getBrowserInfo: async () => ({ version: "159.0" }) });
+    Object.assign(chrome.tabs, { get: async () => ({ ...tab }) });
+    Object.assign(chrome.windows, { get: async () => ({ id: 20, focused }) });
+    Object.assign(chrome, { action: {
+      getPopup: async () => popup,
+      setPopup: async (options: { popup: string | null }) => {
+        await popupGate;
+        popup = options.popup ?? chrome.runtime.getURL("popup.html");
+      },
+      openPopup: async (options: { windowId: number }) => {
+        if (failOpen) throw new Error("another panel is open");
+        opened.push(options.windowId);
+      },
+    } });
+  });
+
+  async function panel(ref = "panel") {
+    const outcome = decisions.open(asker(), ref, { decision: "chooseLogin" });
+    outcome.catch(() => {});
+    await until(() => popup.includes("presentation=panel") && opened.length > 0);
+    const id = new URL(popup).searchParams.get("id")!;
+    const sender = { id: EXT, url: popup };
+    return { id, sender, outcome };
+  }
+
+  async function restored() {
+    await until(() => popup === chrome.runtime.getURL("popup.html"));
+    expect(windows.removed).toEqual([]); // Never remove the user's browser window.
+  }
+
+  test("opens in the original browser window and sends the credential only to the original request", async () => {
+    const p = await panel();
+    expect(opened).toEqual([20]);
+    expect(windows.created).toEqual([]);
+    expect(await decisions.info(p.sender, p.id)).toMatchObject({ origin: ORIGIN, decision: "chooseLogin" });
+    expect(await decisions.logins(p.sender, p.id)).toMatchObject({ status: "ok" });
+    const reply = await decisions.answer(p.sender, p.id, { action: "fill", itemId: "i1" });
+    expect(JSON.stringify(reply)).not.toContain(FILL.password);
+    expect(await p.outcome).toEqual(FILL);
+    await restored();
+  });
+
+  test("rejects content scripts, extension tabs, frames, unrelated popup pages and altered decision URLs", async () => {
+    const p = await panel();
+    for (const sender of [
+      { ...p.sender, id: "other" },
+      { ...p.sender, tab: { id: 7, windowId: 20 } },
+      { ...p.sender, frameId: 3 },
+      { ...p.sender, url: ORIGIN },
+      { ...p.sender, url: chrome.runtime.getURL("popup.html") },
+      { ...p.sender, url: `${p.sender.url}&extra=yes` },
+    ]) {
+      await expect(decisions.answer(sender as chrome.runtime.MessageSender, p.id, { action: "fill", itemId: "i1" })).rejects.toMatchObject({ code: "forbidden" });
+    }
+    expect(calls).toEqual([]);
+    await decisions.answer(p.sender, p.id, { action: "cancel" });
+    await expect(p.outcome).rejects.toMatchObject({ code: "cancelled" });
+    await restored();
+  });
+
+  test("panel disconnect cancels and resets its tab's popup", async () => {
+    const p = await panel();
+    const port = Object.assign(new FakePort(), { name: `decide:${p.id}`, sender: p.sender });
+    await decisions.attach(port as unknown as chrome.runtime.Port);
+    port.serverClose();
+    await expect(p.outcome).rejects.toMatchObject({ code: "cancelled" });
+    await restored();
+    expect(calls).toEqual([]);
+  });
+
+  test("navigation, a tab switch, a browser window switch and tab closure cancel the picker", async () => {
+    for (const cancel of [
+      () => decisions.onTabUpdated(7, { status: "loading" }),
+      () => decisions.onTabUpdated(7, { url: `${ORIGIN}/other` }),
+      () => decisions.onTabActivated({ tabId: 8, windowId: 20 }),
+      () => decisions.onFocusChanged(21),
+      () => decisions.onTabRemoved(7),
+    ]) {
+      const p = await panel();
+      cancel();
+      await expect(p.outcome).rejects.toMatchObject({ code: "cancelled" });
+      await restored();
+      await expect(decisions.answer(p.sender, p.id, { action: "fill", itemId: "i1" })).rejects.toMatchObject({ code: "notFound" });
+    }
+    expect(calls).toEqual([]);
+  });
+
+  test("rechecks active tab, focused window and origin even without a browser event", async () => {
+    const p = await panel();
+    tab.active = false;
+    await expect(decisions.logins(p.sender, p.id)).rejects.toMatchObject({ code: "cancelled" });
+    tab.active = true;
+    focused = false;
+    await expect(decisions.logins(p.sender, p.id)).rejects.toMatchObject({ code: "cancelled" });
+    focused = true;
+    tab.url = "https://other.example/";
+    await expect(decisions.answer(p.sender, p.id, { action: "fill", itemId: "i1" })).rejects.toMatchObject({ code: "cancelled" });
+    expect(calls).toEqual([]);
+    decisions.onTabRemoved(7);
+    await restored();
+  });
+
+  test("a delayed credential response cannot fill after the panel is dismissed", async () => {
+    const p = await panel();
+    let release!: () => void;
+    gate = new Promise<void>((resolve) => { release = resolve; });
+    const answer = decisions.answer(p.sender, p.id, { action: "fill", itemId: "i1" });
+    await until(() => calls.length === 1);
+    decisions.onTabActivated({ tabId: 8, windowId: 20 });
+    await expect(p.outcome).rejects.toMatchObject({ code: "cancelled" });
+    release();
+    await expect(answer).rejects.toMatchObject({ code: "cancelled" });
+    expect(calledDeps).not.toContain("rememberFill:7");
+    await restored();
+  });
+
+  test("failed opening restores the toolbar without creating a separate window", async () => {
+    failOpen = true;
+    await expect(decisions.open(asker(), "r", { decision: "chooseLogin" })).rejects.toMatchObject({ code: "error" });
+    await restored();
+    expect(windows.created).toEqual([]);
+  });
+
+  test("cancelling while the popup URL is being set restores it and never opens a panel", async () => {
+    let release!: () => void;
+    popupGate = new Promise<void>(resolve => { release = resolve; });
+    const outcome = decisions.open(asker(), "r", { decision: "chooseLogin" });
+    outcome.catch(() => {});
+    await sleep(10);
+    decisions.onTabUpdated(7, { status: "loading" });
+    release();
+    await expect(outcome).rejects.toMatchObject({ code: "cancelled" });
+    await restored();
+    expect(opened).toEqual([]);
+  });
+
+  test("replacing a request cannot reset the successor's popup", async () => {
+    const first = await panel();
+    const secondOutcome = decisions.open(asker(), "new", { decision: "chooseLogin" });
+    secondOutcome.catch(() => {});
+    await expect(first.outcome).rejects.toMatchObject({ code: "cancelled" });
+    await until(() => opened.length === 2);
+    const id = new URL(popup).searchParams.get("id")!;
+    expect(id).not.toBe(first.id);
+    await sleep(10);
+    expect(new URL(popup).searchParams.get("id")).toBe(id);
+    await expect(decisions.info(first.sender, first.id)).rejects.toMatchObject({ code: "notFound" });
+    await decisions.answer({ id: EXT, url: popup }, id, { action: "cancel" });
+    await expect(secondOutcome).rejects.toMatchObject({ code: "cancelled" });
+    await restored();
+  });
+
+  test("Firefox below 149 keeps the separate picker window", async () => {
+    Object.assign(chrome.runtime, { getBrowserInfo: async () => ({ version: "140.0" }) });
+    const p = await open({ decision: "chooseLogin" });
+    expect(opened).toEqual([]);
+    await decisions.answer(page(p.id, p.windowId), p.id, { action: "cancel" });
+    await expect(p.outcome).rejects.toMatchObject({ code: "cancelled" });
   });
 });

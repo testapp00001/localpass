@@ -368,6 +368,8 @@ impl Engine {
                 .items
                 .values()
                 .filter(|i| !i.is_trashed())
+                // The removed file-storage prototype has no portable content to export.
+                .filter(|i| i.text(keys::KIND) != Some("file"))
                 .filter(|i| with_passkeys || i.text(keys::KIND) != Some(kinds::PASSKEY))
                 .map(|i| {
                     let v = items::view(&s.state, i);

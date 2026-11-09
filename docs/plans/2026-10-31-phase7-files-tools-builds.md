@@ -324,3 +324,44 @@ Phases 0-6 shipped (v0.2.2 draft). The user set the next round of work on 2026-1
   - Export and checksum compared to the original.
   - Android e2e on `lp_api37`.
   - The security review's fixes, each with a test.
+
+## Changes (2026-11-01, after the 7.6a spike; the user chose level 19 and Linux-only PDF in chat)
+
+Evidence and numbers: `docs/handoff-phase7.md`, "7.6a results"; harness: `docs/spikes/7.6a-webview/`.
+
+- **Compression level is 19 on every platform** (the plan said 22 on desktop and 19 on Android). Level 22 saved 2.6% more on text and nothing on PDFs, for 750 MB of memory and 60% more time on a 50 MB file. The 3% probe stays.
+- **PDF viewer, in-app only on Linux.** Tauri injects its IPC key into subframes on Windows (WebView2) and the Android bridge reaches every frame, so a sandboxed frame cannot be trusted to keep commands out there; on WebKitGTK it was verified that it does. Windows and Android open PDFs with "Open with the system app"; the other viewers (text, image, audio, video) are on all platforms.
+- **The viewer is a sandboxed `srcdoc` iframe** (`sandbox="allow-scripts"`, never a `src=` page of the app) with **one classic IIFE bundle** of pdf.js 6.x and its worker (fake worker on the frame's main thread), built as a separate bundle step into `dist/viewer/`, not as "a second Vite entry". Bytes go in with `postMessage` (transfer).
+- **CSP: only `img-src ... blob:` and `media-src blob:` are added.** `frame-src 'self'` is not needed for a `srcdoc` frame.
+- WebKitGTK plays wav, ogg, opus, mp3, aac, flac, VP8/VP9/AV1 and H.264 from blob URLs on a machine with the full GStreamer set; on a stock install some codecs may be missing, so "Open with..." stays next to every player.
+
+## Changes (2026-11-01, 7.6c: the sync file phase, built)
+
+Where the build differs from the "Sync" design above (reasons and tests: `docs/handoff-phase7.md`, "7.6c results"):
+
+- **No `FilesHave` message.** Each side sends only `FilesWant` (the blobs on its wanted list that it does not hold), the peer serves what it holds, and a blob nobody holds is simply not sent. A "have" list would grow with the vault and the "want" list is usually empty; the flow is four steps instead of six and a device never lists its holdings. The messages are `FilesWant{ids}*` + `Done`, then per blob `FileBegin{id,len}`, `FileChunk{data}*`, `FileEnd`, and `FilesDone`. The initiator still serves first. `Hello.features` (`files1`) and `Hello.files_digest` are as planned.
+- **File problems do not fail the session.** The ops part keeps the 60 s limit for the whole session; the file phase runs after it with its own limits (30 s idle per message, 512 MiB per direction, and a new **20 minute limit for the whole phase**, because the idle limit alone lets a peer that sends one chunk every 29 s hold a connection slot for hours). A file error (a file nobody asked for, wrong bytes or size, a stall, a limit) ends only the file phase and is reported in `SessionOutcome.files_error` and `SyncEvent::SyncCompleted.files_error`, so the ops exchanged before it are still applied.
+- **A sender stops at the budget instead of failing**: it sends no blob that would take it past 512 MiB, and the next session carries on. A receiver whose peer goes past the budget ends the phase.
+- **The content of a file that is new to this device comes in a second round.** A session's file phase uses the wanted list as it was when the session began; the list is rewritten only when the engine folds the new ops in (needs the key), after the session. So the engine asks for another round (`notify_local_change`) whenever it refreshes the wanted list and a wanted blob is missing (after a sync, and on unlock for what arrived while locked). The scheduler dials a changed peer on its next tick (10 s in the app, 200 ms in tests).
+- `SyncService::start` takes the file store as a fourth argument (`Option<FileSync>`, `FileSync::new(blobs)` holds the store and the limits, which tests lower).
+
+## Changes (2026-11-01, 7.6d: the desktop UI, built)
+
+Where the build differs from the 7.6d text above (evidence and tests: `docs/handoff-phase7.md`, "7.6d results"):
+
+- **The viewer decision comes from the bytes, again, at read time.** `file_text`, `file_image` and `file_read` sniff the decrypted content once more and refuse a viewer that does not match (`file_ops::require_viewer`), so a paired device cannot make the text viewer or the PDF frame receive something else by writing a different `file.mime` into the item. `file_read` takes the viewer that asks (`audio`, `video`, `pdf`); pictures go through `file_image` (which also turns a TIFF into PNG), text through `file_text`.
+- **Platform switches live in Rust, in one place:** `AppInfo.files` (`pdfInApp`: Linux only; `openExternal` and `export`: desktop). Android flips its own in 7.6e. `file_read` refuses `pdf` where `pdfInApp` is false, as a backstop.
+- **Programs and scripts are never opened from "Open with…"** (not in the plan): an extension list (`exe`, `bat`, `cmd`, `ps1`, `js`, `vbs`, `lnk`, `desktop`, `sh`, `py`, `jar`, and more, in `temp_files.rs`) is checked on the cleaned name before anything is decrypted; such a file can still be exported. Opening a decrypted `.exe` would run it, and the user may have synced it from a device they no longer remember.
+- **Opened-file copies:** `temp_files.rs` tracks them in `open/manifest.json` (tokens, clean names and times, never paths), removes everything under `open/` at start, retries a copy that could not be removed (reported as "in use"), and deletes them on lock and quit when "Also delete when LocalPass locks or quits" is on. The delay setting is `openedFilesMinutes` (5, 10, 30, a number, or never; default 10) and the sweep runs once a minute from the auto-lock loop.
+- **HEIC is "Open with…" only on every platform** for now. The plan had Windows WIC decode it when the HEIF extension is installed; that is Windows-only code that could not be run here, so it is left out (the viewer kind `imageSystem` already exists for it). Android decodes HEIC with `ImageDecoder` in 7.6e.
+- **The PDF viewer is `app/viewer/pdfview.entry.js`** bundled by `app/scripts/build-viewer.ts` into `app/public/viewer/pdfview.js` (git-ignored; `bun run dev` and `bun run build` run it first). It is built for every platform and only used where `pdfInApp` is true. The frame draws one page at a time to a canvas (no text layer, no search), with page and zoom controls in the parent; pages above 24 megapixels are scaled down, images above 25 megapixels are not decoded, and CJK character maps and JPX/JBIG2 images are not available inside the opaque-origin frame (measured in 7.6a).
+- **Exports report what they left out:** `export_json` and `export_backup` return `{ passkeys, files }`, and Settings shows how many secure files a backup or export will leave out before the user exports. `files_left_out` is the extra command.
+- **Upload on a phone** is wired in the same screen (`<input type=file>` then `file_add_bytes`, bytes as the raw request body and the name in an `x-lp-meta` header as base64url JSON), so 7.6e has less UI left; it is untested on Android.
+
+## Changes (2026-11-09, secure-file storage removed)
+
+The user requested removal of file storage. Task 7.6 is dropped, including the implemented 7.6a-7.6d prototype and the planned
+Android/security-review work. Removed the secure-file UI and settings, Tauri commands, viewers and PDF build assets, blob
+crypto/store modules, compression dependency, file-sync protocol, and feature-specific tests and spike code. Existing saved
+user data is not deleted or migrated. Minimal compatibility guards hide legacy development file records and keep their keys
+private. Completed tasks 7.0-7.5 and the Firefox toolbar picker are retained. Release 7.7 remains gated on a user request.

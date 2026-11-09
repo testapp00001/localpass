@@ -1,4 +1,4 @@
-// The decision window (Firefox only). The background opened it for one request of one page and
+// The decision page (Firefox only), in a toolbar panel or separate window. The background opened it for one request and
 // tells it what the request is (`decisionInfo`); the user decides here, and the background carries
 // the answer out and hands any secret to the page's content script, never to this window. Everything
 // the page supplied is shown only as text, through `displayText`, after the site the browser reported.
@@ -10,6 +10,8 @@ import { createDialogLines, describePasskey } from "../shared/shown";
 import { timing } from "./timing";
 
 const id = new URLSearchParams(location.search).get("id") ?? "";
+const panel = new URLSearchParams(location.search).get("presentation") === "panel";
+document.body.classList.toggle("panel", panel);
 const main = document.getElementById("main") as HTMLElement;
 const siteLabel = document.getElementById("site") as HTMLElement;
 
@@ -27,7 +29,10 @@ async function ask<T>(message: ToBackground): Promise<T> {
 let paused = false;
 const answer = (a: DecisionAnswer) => {
   paused = true;
-  return ask<DecisionDone>({ kind: "decisionAnswer", id, answer: a });
+  return ask<DecisionDone>({ kind: "decisionAnswer", id, answer: a }).then((done) => {
+    if (panel && !done.message) window.close();
+    return done;
+  });
 };
 const code = (e: unknown) => (e instanceof BrokerError ? e.code : "internal");
 const text = (e: unknown) => displayText(e instanceof Error ? e.message : String(e), 200);
@@ -273,7 +278,8 @@ function keepAlive() {
 
 async function start() {
   // Closing the window ends the port, which the background takes as "no".
-  chrome.runtime.connect({ name: `decide:${id}` });
+  const port = chrome.runtime.connect({ name: `decide:${id}` });
+  if (panel) port.onDisconnect.addListener(() => window.close());
   keepAlive();
   let info: DecisionInfo;
   try {
