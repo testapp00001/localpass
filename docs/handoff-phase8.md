@@ -7,9 +7,9 @@ state; do not rely on conversation history. All plans: `docs/plans/README.md`.
 
 Phase 8 started on branch `phase7` at `c682e84`. Its implementation and this handoff are recorded together in the local Phase 8
 commit on `phase7`, requested by the user on 2026-11-15. The user then pushed it and requested merging into `main` (PR #1).
-Tag and release were not requested; the merge result and final CI status are recorded in PR #1.
-`.cargo/config.toml` is unchanged; never commit, edit or revert the owner's linker settings unasked. Phase 7's only open item is
-7.7 (release 0.3.0, only when the user asks; `docs/handoff-phase7.md`).
+PR #1 merged successfully as `bf57ddd`; the user then requested release 0.3.0, published from `34b7788` on 2026-11-15.
+`.cargo/config.toml` is unchanged; never commit, edit or revert the owner's linker settings unasked. Phase 7's release task 7.7 is
+complete; its release verification is recorded in `docs/handoff-phase7.md`.
 
 **Where it stands and what to do next**
 
@@ -18,9 +18,10 @@ State on 2026-11-15 (earlier implementation and review details remain under "Sta
 - 8.1, 8.2, 8.3a, 8.3b, 8.3c: coded by agents and checked by the lead (code read, checks re-run; 8.3b and 8.3c also
   mutation-checked). The user accepted the local walkthrough on 2026-11-15; Windows checks remain open.
 - 8.4: done on Linux; its assisted check (the Unlock round trip from both browsers with the app in the tray) passed in Firefox and
-  Chrome on 2026-11-13. Its Windows paths compiled in merge CI on 2026-11-15; Android compilation remains open.
-- 8.5 (the signed `.xpi` in the RPM): done in the tree and checked by the lead. Proven only by the first real release run; Open in
-  the real app not tried.
+  Chrome on 2026-11-13. Its Windows paths compiled in merge CI on 2026-11-15; the Android release built for ARM64 and x86_64 in release CI.
+- 8.5 (the signed `.xpi` in the RPM): proved by the v0.3.0 release. The signed add-on was downloaded in the Fedora container and
+  packaged through the added config; the RPM's XPI is byte-identical to the standalone signed download. Open in the installed app
+  has not been tried.
 - 8.6: done, including the user's acceptance of the real-screen walkthrough on 2026-11-15:
   - the app walk-through by code and its small fixes, then the fixes of its items 1, 5 and 7 (checked by the lead);
   - the independent review, `docs/phase8-security-review.md`: no High or Medium finding; F1, F2, F4 fixed and checked by the lead on
@@ -33,8 +34,8 @@ State on 2026-11-15 (earlier implementation and review details remain under "Sta
 Next steps, in this order:
 1. **The user's decisions**, list (b) below, remain undecided; acceptance of the walkthrough did not approve these changes.
 2. Complete the Windows/Android and release verification in list (c) when the required machine or release is available.
-3. Complete the authorized PR #1 merge after CI passes. Tag and release only when the user asks. Phase 8 remains in progress for
-   the remaining external checks; 8.6 is closed.
+3. PR #1 is merged and v0.3.0 is published. Phase 8 remains in progress only for its remaining manual checks; 8.6 is closed.
+   The five usability follow-ups remain undecided. Another release is only made when requested.
 
 **Acceptance and checks (2026-11-15)**
 - The user explicitly confirmed Chrome pairing, saving a new login, filling it, and no duplicate offer after autofill or manual
@@ -43,8 +44,8 @@ Next steps, in this order:
 - Fresh automated checks: `cargo test --offline --locked --workspace --exclude lp-winauth --no-fail-fast`: 381 passed, 0 failed,
   2 ignored; extension `bun test`: 443 passed, 0 failed; app `bun test`: 21 passed, 9 skipped, 0 failed; both TypeScript checks and
   `cargo fmt --all -- --check` passed. Socket-dependent tests first failed under sandbox restrictions, then passed with socket access.
-- Browser e2e and clippy were not rerun in the initial local acceptance checks; the later merge CI results are below. Android
-  compilation and release packaging remain unverified. Decisions in list (b) remain open.
+- Browser e2e and clippy were not rerun in the initial local acceptance checks; subsequent merge CI and release results are below.
+  Android compilation and signed Firefox RPM packaging are now verified by release 0.3.0. Decisions in list (b) remain open.
 - During the requested merge to `main` (PR #1), the first Linux CI run passed Clippy but its three helper-process tests failed:
   Cargo 1.100 runs the test executable from a nested `build/<crate>/<hash>/out/` folder, so the old two-parent lookup missed the
   `nmhost` example. The test now searches ancestor folders for the built example, and both CI jobs build examples before tests.
@@ -66,6 +67,17 @@ Next steps, in this order:
   example builds and workspace tests passed. The final Windows provider cancellation test exposed the same two-parent helper lookup
   in `lp-winauth/tests/pipe.rs`; it now finds `dev_host.exe` from either Cargo layout. The actual lookup function compiled and found
   fixtures in legacy and nested paths on Linux; the Windows integration run remains CI's responsibility. No provider test was skipped.
+
+**Release 0.3.0 (2026-11-15)**
+- Published: https://github.com/testapp00001/localpass/releases/tag/v0.3.0 (source `34b7788`, annotated tag `v0.3.0`).
+- Release workflow `43704939727` passed all jobs; CI `43704939634` also passed for the release commit. Windows installer, Fedora RPM,
+  signed Android APK (ARM64 and x86_64), Chromium ZIP, signed Firefox XPI and checksums are available.
+- All five download hashes matched `SHA256SUMS.txt`. All six attestations verified against the release workflow, tag and source
+  digest. Android's APK v2 signature uses the pinned release certificate; both app ABIs are present.
+- 8.5's signed path is proved: the RPM metadata is `localpass` / `0.3.0` / `x86_64`, and
+  `/usr/lib/localpass/firefox/localpass-firefox.xpi` is byte-identical to the standalone signed XPI. The unsigned workflow branch was
+  not exercised by this signed release. Installed-app Open, Windows browser checks and platform runtime smoke checks were not run
+  on this Linux host; no installed app or real vault was started.
 
 **For the user: one list**
 
@@ -110,13 +122,13 @@ Firefox, Load Temporary Add-on, `extension/dist-firefox/manifest.json`; Chrome: 
 (The line numbers are those of the walk-through, before the small fixes; look the code up again before acting.)
 
 (c) Needs another machine or a release:
-- Android builds of the changed `cfg` paths (8.4's `prompt_window.rs`/`broker.rs`) and of `commands.rs` (8.1, 8.5,
-  `broker_respond`): not compiled here. Windows compilation and workspace tests passed in merge CI on 2026-11-15.
+- Windows compilation/workspace tests and Android ARM64/x86_64 release builds passed. These build checks are complete; they do
+  not claim platform runtime coverage beyond the tests that actually ran.
 - Windows checks of the panel in Chrome and Edge (focus rule, shortcut assignment, `openPopup`-to-attach order, `e2e/app.ts`), on
   the Windows work laptop.
-- The first real release run for 8.5 (`download-artifact` in the Fedora container, the `--config` merge in CI, the signed and
-  unsigned paths) and **Open** in the installed app (Nautilus selecting the file).
-- Release 7.7 / 0.3.0: only when the user asks.
+- **Open** in the installed app (Nautilus selecting the signed add-on) still needs an assisted check. The first signed release
+  path for 8.5 passed; the unsigned workflow branch was not exercised by this release.
+- Release 7.7 / 0.3.0 is complete. Windows installer and Android runtime smoke checks were not rerun on this Linux host.
 
 Rules:
 - One task per session, in plan order.

@@ -121,3 +121,12 @@ Things decided while carrying out 8.5 and 8.6.
   browser disconnect and hidden-control focus decisions remain undecided; no implementation of those follow-ups was approved.
 - **Commit scope.** Record the existing Phase 8 implementation, tests and documentation together on `phase7`. Leave
   `.cargo/config.toml` unchanged. Push, merge, tag and release only when separately requested.
+
+## Changes (2026-11-15, release 0.3.0)
+
+The user requested a release after PR #1 merged. v0.3.0 is published from `34b7788`; all release jobs and the release commit's CI
+passed. Android release compilation succeeded for ARM64 and x86_64. Task 8.5's signed packaging path is now proved by a real release:
+the Fedora RPM contains an XPI byte-identical to the standalone Mozilla-signed download. All five download hashes and all six build
+attestations were verified against the exact tag and source. Windows browser checks, installed-app Open and the five usability
+choices remain open; Windows installer/Android runtime smoke checks were not rerun on this Linux host, and this signed release did
+not exercise the unsigned Firefox workflow branch. Details are in the Phase 8 handoff.

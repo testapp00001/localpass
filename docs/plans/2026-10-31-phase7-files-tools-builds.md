@@ -365,3 +365,11 @@ Android/security-review work. Removed the secure-file UI and settings, Tauri com
 crypto/store modules, compression dependency, file-sync protocol, and feature-specific tests and spike code. Existing saved
 user data is not deleted or migrated. Minimal compatibility guards hide legacy development file records and keep their keys
 private. Completed tasks 7.0-7.5 and the Firefox toolbar picker are retained. Release 7.7 remains gated on a user request.
+
+## Changes (2026-11-15, release 0.3.0)
+
+At the user's explicit request, Phase 7 and Phase 8 were merged into main through PR #1 and v0.3.0 was published from `34b7788`.
+Task 7.7 is complete, so Phase 7 is done (7.6 remains dropped). The Windows installer, Fedora RPM, signed Android universal APK,
+Chromium extension ZIP, Mozilla-signed Firefox XPI and checksums are available. All download hashes and all six build attestations
+were verified; the RPM's signed XPI matches the standalone download. Release build and verification details live in the Phase 7
+handoff. The existing Windows final matrix and remaining Phase 8 manual checks are separate from this completed release.

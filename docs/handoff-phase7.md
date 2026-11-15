@@ -3,16 +3,18 @@
 The approved plan is `docs/plans/2026-10-31-phase7-files-tools-builds.md` (tasks 7.0-7.7, with the design of each). This file holds the
 state; do not rely on conversation history. All plans: `docs/plans/README.md`.
 
-## RESUME HERE (state updated 2026-11-09)
+## RESUME HERE (state updated 2026-11-15)
 
 **Additional completed task (2026-11-08): Firefox toolbar password picker.** See the results section at the end and
 `docs/plans/2026-11-08-firefox-toolbar-picker.md`. Secure-file storage was subsequently removed (2026-11-09). The toolbar changes are included in the local commit requested on 2026-11-09.
 
-Phases 0-6 are done except 5.6 (the Windows final matrix, on the work laptop; `docs/handoff-phase4-5.md`). v0.2.2 is the last release; the user
-tested and approved it on 2026-10-31. Phase 7 started from a clean tree at `d4eb731`.
+**Phase 7 is complete.** Phases 0-6 are done except 5.6 (the Windows final matrix, on the work laptop;
+`docs/handoff-phase4-5.md`). The latest release is [v0.3.0](https://github.com/testapp00001/localpass/releases/tag/v0.3.0), published
+on 2026-11-15. Phase 7 started from a clean tree at `d4eb731`; secure-file storage (7.6) was dropped at the user's request.
 
-**Branch:** work is on branch `phase7` (`main` is still at v0.2.2; merging into `main` is the user's call). As of 2026-11-01 the first five commits (build config, Firefox Esc/click-outside, hidden notes, desktop QR, docs) are pushed to
-`origin/phase7` at the user's request, so the Windows PC could fetch them. Later commits (the Windows results, 7.5) stay local until the user says to push (the user has asked only for commits since).
+**Branch:** Phase 7 and Phase 8 were merged into `main` through PR #1 (`bf57ddd`). Release commit `34b7788` bumps the versions and
+changelog to 0.3.0; annotated tag `v0.3.0` points to that commit. The user explicitly requested the commit, merge and release.
+The remaining Phase 8 manual checks and usability decisions are in `docs/handoff-phase8.md`.
 
 Rules (the plan's "Working rules"; the agent rule itself is in `CLAUDE.md`, "Working with agents"):
 - One task per fresh chat. 7.0-7.3 are small and independent; do the later tasks in the order of the plan.
@@ -114,7 +116,14 @@ other subdomains stay separate unless the option is on.
   Expect with the toggle off: two groups, `ann@mail.test` on `example.com` (the root and the www copy) and `admin` on `192.168.1.10` (NAS and NAS again; the :8443 one stays out); with it on: the example.com group gains "Example (sub a)" and a
   `carl` group on `example.co.uk` appears. Trashing with the root kept must warn about notes (the www copy) and, with the option on, about a 2FA secret (the sub a copy). The other password, other user and "Lonely" logins never appear.
 - [dropped] 7.6 Secure-file storage: removed at the user’s request on 2026-11-09, including the 7.6a-7.6d implementation. The results below are historical; 7.6e and 7.6f will not be implemented.
-- [ ] 7.7 Release 0.3.0 (only when the user says so)
+- [x] 7.7 Release 0.3.0 (2026-11-15, explicitly requested by the user): published as the latest release at
+  https://github.com/testapp00001/localpass/releases/tag/v0.3.0 from `34b7788`, tag `v0.3.0`.
+  Release workflow `43704939727` and the release commit's CI `43704939634` passed. Assets: Windows installer, Fedora RPM,
+  Android universal APK (ARM64 and x86_64), Chrome/Chromium extension ZIP, Mozilla-signed Firefox XPI, and `SHA256SUMS.txt`.
+  All five download hashes matched; all six build attestations verified against the repository, release workflow, exact tag and
+  source commit. Android's v2 signature matched the pinned release certificate. The RPM contains a byte-identical copy of the
+  signed standalone XPI. Windows installation, Android runtime and the installed app's file-manager Open action were not run here;
+  the existing Windows final matrix and Phase 8 manual checks remain separate. No installed app or real vault was started.
 
 ## 7.6a results (2026-11-01, this laptop: Fedora 44, WebKitGTK 2.54.2, GStreamer 1.28.8 with libav/openh264/dav1d/fdk-aac, rustc 1.99.1)
 
