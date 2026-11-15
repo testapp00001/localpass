@@ -49,12 +49,18 @@ impl Host for SimpleHost {
 }
 
 fn helper_path() -> PathBuf {
-    // target/debug/deps/<test>.exe -> target/debug/examples/nmhost.exe
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    path.pop();
-    path.join("examples")
-        .join(format!("nmhost{}", std::env::consts::EXE_SUFFIX))
+    // Cargo may put tests in deps/ or build/<crate>/<hash>/out/. Find the built
+    // example from either layout, also with a custom target directory or profile.
+    let executable = std::env::current_exe().unwrap();
+    executable
+        .ancestors()
+        .skip(1)
+        .map(|dir| {
+            dir.join("examples")
+                .join(format!("nmhost{}", std::env::consts::EXE_SUFFIX))
+        })
+        .find(|path| path.is_file())
+        .expect("build the helper first: cargo build -p lp-broker --examples")
 }
 
 /// The runtime folder the tests' sockets live in (Linux), so no test ever touches the user's own.

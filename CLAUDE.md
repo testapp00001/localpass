@@ -66,7 +66,9 @@ bun run build --e2e && bun run e2e/assisted.ts [profile] [app binary]   # ASSIST
 cargo run -q -p lp-engine --example passkey_fixture > tools/passkey-verify/fixture.json && cd tools/passkey-verify && bun install && bun run verify.ts fixture.json
 ```
 
-`cargo test -p lp-broker` (not `--test nmhost` alone) is needed: the helper tests start the `nmhost` example, which only `cargo test` of the whole crate builds.
+Before broker tests, run `cargo build -p lp-broker --examples`: the helper tests start the runnable `nmhost` example, and compiling
+examples during `cargo test` does not guarantee that binary is available. The tests support both the legacy `deps/` and newer nested
+Cargo executable layouts.
 `LOCALPASS_PROFILE` also selects the broker's pipe name, so the e2e tests never touch a running app.
 
 The Vite dev port (`app/vite.config.ts`) must equal `devUrl` in `app/src-tauri/tauri.conf.json`. It is 1420 because Windows reserves 6885-6984 here (Hyper-V), which makes listening fail with EACCES. `tauri dev` also rebuilds and restarts the app whenever anything under `crates/` or `app/src-tauri` changes.

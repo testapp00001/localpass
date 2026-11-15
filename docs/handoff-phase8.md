@@ -43,6 +43,11 @@ Next steps, in this order:
   `cargo fmt --all -- --check` passed. Socket-dependent tests first failed under sandbox restrictions, then passed with socket access.
 - Browser e2e and clippy were not rerun in this session; their last recorded runs are below. Windows/Android compilation and release
   packaging were not verified. Decisions in list (b) remain open.
+- During the requested merge to `main` (PR #1), the first Linux CI run passed Clippy but its three helper-process tests failed:
+  Cargo 1.100 runs the test executable from a nested `build/<crate>/<hash>/out/` folder, so the old two-parent lookup missed the
+  `nmhost` example. The test now searches ancestor folders for the built example, and both CI jobs build examples before tests.
+  Reproduced locally by relocating the old test executable (failed), then reran the corrected broker suite (109 passed) and all
+  three tests from the nested layout (3 passed); formatting and diff checks passed. No production behavior changed.
 
 **For the user: one list**
 
