@@ -3092,7 +3092,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "localpass"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "ashpd",
@@ -3142,7 +3142,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lp-broker"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "libc",
  "lp-core",
@@ -3160,7 +3160,7 @@ dependencies = [
 
 [[package]]
 name = "lp-cli"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3176,7 +3176,7 @@ dependencies = [
 
 [[package]]
 name = "lp-core"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "argon2",
  "chacha20poly1305 0.11.0",
@@ -3205,7 +3205,7 @@ dependencies = [
 
 [[package]]
 name = "lp-engine"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "data-encoding",
  "lp-core",
@@ -3229,7 +3229,7 @@ dependencies = [
 
 [[package]]
 name = "lp-import"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "csv",
  "keepass",
@@ -3242,7 +3242,7 @@ dependencies = [
 
 [[package]]
 name = "lp-store"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "lp-core",
  "rusqlite",
@@ -3253,7 +3253,7 @@ dependencies = [
 
 [[package]]
 name = "lp-sync"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "data-encoding",
  "if-addrs",
@@ -3274,7 +3274,7 @@ dependencies = [
 
 [[package]]
 name = "lp-winauth"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "data-encoding",
