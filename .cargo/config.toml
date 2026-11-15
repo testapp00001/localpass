@@ -1,3 +1,8 @@
+# Windows: link with the LLD that ships with rustc instead of MSVC's link.exe (Phase 7.1; the user
+# built and ran it on Windows on 2026-11-01). Remove this block if a Windows link ever fails.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
 # Android 15+ phones may use 16 KB memory pages. A shared library whose segments are
 # aligned to 4 KB fails to load there, and NDK r27 does not align them by default.
 [target.aarch64-linux-android]

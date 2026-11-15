@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { findLoginForms, isOtpField, setValue } from "../src/content/detect";
+import { findLoginForms, isOtpField, isOtpPasswordBox, setValue } from "../src/content/detect";
 
 const opts = { assumeVisible: true };
 
@@ -144,6 +144,53 @@ describe("one-time code fields", () => {
     expect(isOtpField(field("#b")!)).toBe(true);
     expect(isOtpField(field("#c")!)).toBe(false);
     expect(isOtpField(field("#d")!)).toBe(false); // too open-ended without a length
+  });
+});
+
+describe("one-time codes in type=password boxes (8.2)", () => {
+  test("a code page with a hidden-as-typed code box is a code form, not a login", () => {
+    page(`<form><input type="password" name="code" autocomplete="one-time-code" maxlength="6"><button>Verify</button></form>`);
+    const [form, ...rest] = findLoginForms(document, opts);
+    expect(rest).toHaveLength(0);
+    expect(form?.password).toBeNull();
+    expect(form?.otp).toBe(field('[name="code"]'));
+  });
+
+  test("strong names on a short box count without autocomplete", () => {
+    page(`
+      <form id="a"><input type="password" name="otp" maxlength="6"></form>
+      <form id="b"><input type="password" id="two-factor-code" inputmode="numeric"></form>
+      <form id="c"><input type="password" name="pin" placeholder="Verification code" maxlength="8"></form>`);
+    const forms = findLoginForms(document, opts);
+    expect(forms.map((f) => f.password)).toEqual([null, null, null]);
+    expect(forms.map((f) => f.otp)).toEqual([field('[name="otp"]'), field("#two-factor-code"), field('[name="pin"]')]);
+  });
+
+  test("a password with a code box beside it is a sign-in, not a sign-up", () => {
+    page(`<form><input type="text" name="user"><input type="password" name="pw"><input type="password" name="otp" maxlength="6"></form>`);
+    const [form, ...rest] = findLoginForms(document, opts);
+    expect(rest).toHaveLength(0);
+    expect(form?.password).toBe(field('[name="pw"]'));
+    expect(form?.isNewPassword).toBe(false);
+    expect(form?.extraPasswords).toEqual([]);
+    expect(form?.otp).toBe(field('[name="otp"]'));
+  });
+
+  test("real password boxes are never dropped", () => {
+    page(`
+      <form id="a"><input type="text" name="user"><input type="password" name="otp" autocomplete="current-password" maxlength="6"></form>
+      <form id="b"><input type="text" name="user"><input type="password" name="passcode" maxlength="8"></form>
+      <form id="c"><input type="text" name="user"><input type="password" name="token" maxlength="6"></form>
+      <form id="d"><input type="text" name="user"><input type="password" name="pin" maxlength="4" inputmode="numeric"></form>
+      <form id="e"><input type="text" name="user"><input type="password" name="security_code"></form>
+      <form id="f"><input type="text" name="user"><input type="password" name="new_otp_secret" autocomplete="new-password" maxlength="6"></form>`);
+    const forms = findLoginForms(document, opts);
+    for (const id of ["a", "b", "c", "d", "e", "f"]) {
+      const box = document.querySelector<HTMLInputElement>(`#${id} [type=password]`)!;
+      expect(forms.some((f) => f.password === box), id).toBe(true);
+      expect(isOtpField(box), id).toBe(false);
+      expect(isOtpPasswordBox(box), id).toBe(false);
+    }
   });
 });
 

@@ -8,10 +8,13 @@
 //! ```
 //!
 //! Prints `READY <pipe>` when listening and a `VAULT <json>` line after every change. Reads
-//! `lock` and `quit` from standard input.
+//! `lock` and `quit` from standard input, and for tests of a slow Unlock: `hold-unlock` (from then
+//! on an unlock prints `UNLOCK?` and waits), `unlock yes` / `unlock no` (answers the waiting one)
+//! and `auto-unlock` (back to unlocking at once).
 
 use std::io::BufRead;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use lp_broker::server::BoxFuture;
 use lp_broker::{
@@ -25,6 +28,9 @@ const MASTER: &str = "dev host master password";
 struct DevHost {
     engine: Engine,
     clients: MemoryClientStore,
+    /// `hold-unlock`: an unlock waits for `unlock yes|no` (as the app waits for the person).
+    hold_unlock: AtomicBool,
+    unlock_answer: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
 }
 
 impl Host for DevHost {
@@ -43,8 +49,18 @@ impl Host for DevHost {
             true
         })
     }
-    fn unlock<'a>(&'a self) -> BoxFuture<'a, bool> {
-        Box::pin(async move { self.engine.unlock(MASTER).is_ok() })
+    fn unlock<'a>(&'a self, _client: &'a str) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            if self.hold_unlock.load(Ordering::SeqCst) {
+                let (answer, answered) = tokio::sync::oneshot::channel();
+                *self.unlock_answer.lock().expect("unlock answer") = Some(answer);
+                println!("UNLOCK?");
+                if !answered.await.unwrap_or(false) {
+                    return false;
+                }
+            }
+            self.engine.unlock(MASTER).is_ok()
+        })
     }
     fn verify_user<'a>(&'a self, _reason: &'a str) -> BoxFuture<'a, bool> {
         Box::pin(async { true })
@@ -104,7 +120,10 @@ async fn main() {
     let host = Arc::new(DevHost {
         engine: engine.clone(),
         clients: MemoryClientStore::default(),
+        hold_unlock: AtomicBool::new(false),
+        unlock_answer: Mutex::new(None),
     });
+    let control = host.clone();
     let (stop, stopped) = tokio::sync::watch::channel(false);
     #[cfg(any(windows, target_os = "linux"))]
     let server = tokio::spawn(lp_broker::pipe::serve(Broker::new(host), stopped));
@@ -136,6 +155,14 @@ async fn main() {
                     println!("LOCKED");
                 }
                 "vault" => print_vault(&commands),
+                "hold-unlock" => control.hold_unlock.store(true, Ordering::SeqCst),
+                "auto-unlock" => control.hold_unlock.store(false, Ordering::SeqCst),
+                answer @ ("unlock yes" | "unlock no") => {
+                    let waiting = control.unlock_answer.lock().expect("unlock answer").take();
+                    if let Some(waiting) = waiting {
+                        let _ = waiting.send(answer == "unlock yes");
+                    }
+                }
                 "quit" => std::process::exit(0),
                 _ => {}
             }

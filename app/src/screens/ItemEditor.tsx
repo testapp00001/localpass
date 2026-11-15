@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { CreditCard, KeyRound, Plus, ScanLine, StickyNote, Trash2, Wand2, X } from "lucide-react";
 import { api, emptyItem, errorText, type FolderView, type ItemInput, type ItemKind } from "../lib/api";
-import { Button, ErrorText, IconButton, PasswordInput, Select, TextArea, TextInput, Toggle } from "../components/ui";
+import { Button, ErrorText, IconButton, PasswordInput, SecretTextArea, Select, TextArea, TextInput, Toggle } from "../components/ui";
 import { PasswordGenerator } from "../components/PasswordGenerator";
+import { TotpQrTools } from "../components/TotpQrTools";
 import { canScan, scanQr } from "../lib/scan";
 
 const kinds: { kind: ItemKind; label: string; icon: typeof KeyRound }[] = [
@@ -58,6 +59,16 @@ export function ItemEditor({
   const setCard = (patch: Partial<NonNullable<ItemInput["card"]>>) =>
     setItem((i) => (i ? { ...i, card: { ...(i.card ?? emptyItem("card").card!), ...patch } } : i));
   const urls = item.urls.length ? item.urls : [""];
+  const totpField = (
+    <TextInput
+      label="2FA secret (optional)"
+      value={item.totp}
+      onChange={(e) => set({ totp: e.target.value })}
+      placeholder="otpauth://… or base32 key"
+      hint="Paste the setup key or otpauth:// link shown when you enable two-factor authentication."
+      className="secret"
+    />
+  );
 
   const save = async () => {
     setBusy(true);
@@ -127,6 +138,7 @@ export function ItemEditor({
                   <TextInput
                     value={u}
                     placeholder="https://"
+                    aria-label={urls.length > 1 ? `Website ${i + 1}` : "Website"}
                     onChange={(e) => set({ urls: urls.map((x, j) => (j === i ? e.target.value : x)) })}
                   />
                   {urls.length > 1 && (
@@ -140,16 +152,9 @@ export function ItemEditor({
                 + Add website
               </button>
             </div>
-            <div className="space-y-2">
-              <TextInput
-                label="2FA secret (optional)"
-                value={item.totp}
-                onChange={(e) => set({ totp: e.target.value })}
-                placeholder="otpauth://… or base32 key"
-                hint="Paste the setup key or otpauth:// link shown when you enable two-factor authentication."
-                className="secret"
-              />
-              {canScan && (
+            {canScan ? (
+              <div className="space-y-2">
+                {totpField}
                 <Button
                   type="button"
                   variant="secondary"
@@ -167,8 +172,12 @@ export function ItemEditor({
                   <ScanLine className="size-4" />
                   Scan setup QR code
                 </Button>
-              )}
-            </div>
+              </div>
+            ) : (
+              <TotpQrTools value={item.totp} onFound={(uri) => set({ totp: uri })}>
+                {totpField}
+              </TotpQrTools>
+            )}
           </>
         )}
 
@@ -187,7 +196,11 @@ export function ItemEditor({
           </div>
         )}
 
-        <TextArea label="Notes" value={item.notes} onChange={(e) => set({ notes: e.target.value })} rows={item.kind === "note" ? 8 : 3} />
+        {item.kind === "note" ? (
+          <SecretTextArea label="Notes" value={item.notes} onChange={(e) => set({ notes: e.target.value })} rows={8} />
+        ) : (
+          <TextArea label="Notes" value={item.notes} onChange={(e) => set({ notes: e.target.value })} rows={3} />
+        )}
 
         <div className="space-y-2">
           <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Custom fields</label>
@@ -196,12 +209,14 @@ export function ItemEditor({
               <TextInput
                 value={f.label}
                 placeholder="Label"
+                aria-label="Field label"
                 onChange={(e) => set({ custom: item.custom.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })}
                 className="sm:w-40"
               />
               <TextInput
                 value={f.value}
                 placeholder="Value"
+                aria-label={f.label ? `${f.label} value` : "Field value"}
                 type={f.hidden ? "password" : "text"}
                 onChange={(e) => set({ custom: item.custom.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })}
               />

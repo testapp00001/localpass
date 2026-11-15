@@ -1,4 +1,6 @@
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]
-targets = ["aarch64-linux-android", "armv7-linux-androideabi", "i686-linux-android", "x86_64-linux-android"]
+# Only the ABIs we ship (phones and the emulator); a build without `--target` fails fast instead
+# of filling the disk with two more target trees.
+targets = ["aarch64-linux-android", "x86_64-linux-android"]

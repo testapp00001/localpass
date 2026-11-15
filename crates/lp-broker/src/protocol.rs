@@ -151,6 +151,20 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
     },
+    /// What `SaveLogin` with these values would do, without doing it: `{status: "new" | "update" |
+    /// "unchanged"}`. The extension asks before it offers to save a sign-in, so a login that is
+    /// already saved is not offered again. Never prompts and never unlocks: a locked vault answers
+    /// `locked`. Extension clients only.
+    ///
+    /// What it reveals: whether this user name has a login for this site and whether its password
+    /// is this one. A paired extension already gets more than that without a prompt, because
+    /// `FindLogins` lists the user names for any site and `FillLogin` returns the password of a
+    /// login saved for that site; so this gives it nothing new.
+    CheckLogin {
+        origin: String,
+        username: String,
+        password: String,
+    },
     GeneratePassword {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         options: Option<PasswordOptions>,
@@ -405,6 +419,35 @@ mod tests {
             }
             .is_interactive()
         );
+        let check = Request::CheckLogin {
+            origin: String::new(),
+            username: String::new(),
+            password: String::new(),
+        };
+        assert!(
+            !check.allowed_for_provider() && !check.provider_only() && !check.is_interactive(),
+            "checking a login is for the extension and never prompts"
+        );
+    }
+
+    #[test]
+    fn check_login_parses_from_the_json_the_extension_sends() {
+        let env: RequestEnvelope = serde_json::from_str(
+            r#"{"id":9,"op":"checkLogin","origin":"https://example.com","username":"alice","password":"pw"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            env.request,
+            Request::CheckLogin { ref origin, ref username, ref password }
+                if origin == "https://example.com" && username == "alice" && password == "pw"
+        ));
+        // Every field is required, as for `saveLogin`.
+        assert!(
+            serde_json::from_str::<RequestEnvelope>(
+                r#"{"id":9,"op":"checkLogin","origin":"https://example.com","username":"alice"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -475,6 +518,14 @@ mod tests {
                     title: None,
                 },
                 "saveLogin",
+            ),
+            (
+                Request::CheckLogin {
+                    origin: "https://example.com".into(),
+                    username: "a".into(),
+                    password: "b".into(),
+                },
+                "checkLogin",
             ),
             (
                 Request::GeneratePassword { options: None },

@@ -239,4 +239,26 @@ mod tests {
         ])));
         assert!(!is_allowed_caller(&args(&["localpass"])));
     }
+
+    #[test]
+    fn linux_chrome_invocations_are_recognised_and_checked() {
+        // Chrome, Chromium, Brave, Edge and Vivaldi on Linux pass only the caller's origin (no
+        // `--parent-window`, which is Windows only).
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ours = args(&["/usr/bin/localpass", &allowed_origin()]);
+        assert!(is_native_host_invocation(&ours));
+        assert!(is_allowed_caller(&ours));
+        let other = args(&[
+            "/usr/bin/localpass",
+            "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
+        ]);
+        assert!(is_native_host_invocation(&other));
+        assert!(!is_allowed_caller(&other));
+        // Our id without the trailing slash is not the exact origin Chrome passes.
+        let no_slash = args(&[
+            "/usr/bin/localpass",
+            &format!("chrome-extension://{EXTENSION_ID}"),
+        ]);
+        assert!(!is_allowed_caller(&no_slash));
+    }
 }

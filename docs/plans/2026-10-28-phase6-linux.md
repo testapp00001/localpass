@@ -1,3 +1,5 @@
+> **Status: done (2026-10-31).** v0.2.2 was tested and approved by the user. State and report: `docs/handoff-phase6-linux.md`. Index: `docs/plans/README.md`.
+
 # Phase 6: LocalPass on Fedora Linux (home laptop) + Firefox
 
 ## Context
@@ -209,3 +211,7 @@ Load `extension/dist` with a hand-made Firefox manifest as a temporary add-on in
 - **6.5:** a CI run on a test tag (draft release) produces an RPM that installs into a fresh `fedora:44` container (`dnf install ./*.rpm`, `rpm -V`) and starts. The signed XPI installs into Fedora's Firefox and survives a restart.
 - **6.6:** `cd extension && bunx tsc --noEmit && bun test`, the new Firefox BiDi e2e (fill, save, decoys, passkeys) and `tools/passkey-verify`. The Chrome build is unchanged (`bun run build` output diff, plus the Chrome unit tests).
 - **6.7:** the assisted checklist above on the real phone, the work laptop and this laptop.
+
+## Changes (2026-10-31)
+
+- The working rule "No agents except a security review" (Working rules, above) is superseded by the "Working with agents" section of `CLAUDE.md`: no agents by default, one only for an independent look (audit, review, second opinion).

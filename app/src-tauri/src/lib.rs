@@ -17,6 +17,10 @@ mod mobile;
 pub mod native_host;
 #[cfg(any(windows, target_os = "linux"))]
 mod native_messaging;
+#[cfg(target_os = "linux")]
+mod prompt_window;
+#[cfg(desktop)]
+mod qr;
 mod settings;
 mod windows_passkeys;
 
@@ -131,6 +135,12 @@ enum UiEvent {
     /// then offers Windows Hello if it had held back while the window was hidden.
     #[cfg(desktop)]
     WindowShown,
+    /// Which browser (broker client) is waiting for an unlock, for the unlock screen; `None`
+    /// once none is. `version` grows with every change (the screen also asks on its own).
+    UnlockWaiting {
+        version: u64,
+        name: Option<String>,
+    },
 }
 
 fn ui_event(ev: EngineEvent) -> Option<UiEvent> {
@@ -232,6 +242,11 @@ pub(crate) fn show_main(app: &AppHandle) {
 /// the unlock screen, which may have held back its Windows Hello offer while hidden.
 #[cfg(desktop)]
 fn show_main_for_user(app: &AppHandle) {
+    // Noted before the window is shown: the prompts a browser raised then leave it open.
+    #[cfg(target_os = "linux")]
+    if let Some(broker) = app.try_state::<broker::BrokerState>() {
+        broker.host.window_opened_by_user();
+    }
     show_main(app);
     let _ = app.emit("lp-event", UiEvent::WindowShown);
 }
@@ -457,6 +472,14 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // The focus log for the measurement of browser prompts (prompt_window.rs).
+            #[cfg(target_os = "linux")]
+            if let WindowEvent::Focused(focused) = event
+                && window.label() == "main"
+                && let Some(broker) = window.try_state::<broker::BrokerState>()
+            {
+                broker.host.window_focus_changed(*focused);
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
                 if cfg!(desktop) && state.settings().close_to_tray {
@@ -478,6 +501,7 @@ pub fn run() {
             commands::quick_unlock_disable,
             commands::change_password,
             commands::list_items,
+            commands::find_duplicates,
             commands::get_item,
             commands::save_item,
             commands::trash_item,
@@ -489,6 +513,12 @@ pub fn run() {
             commands::copy_field,
             commands::copy_text,
             commands::totp_code,
+            #[cfg(desktop)]
+            commands::totp_qr_from_clipboard,
+            #[cfg(desktop)]
+            commands::totp_qr_from_file,
+            #[cfg(desktop)]
+            commands::totp_qr_from_screen,
             commands::generate_password,
             commands::folders,
             commands::save_folder,
@@ -513,9 +543,11 @@ pub fn run() {
             commands::browser_remove,
             commands::browser_client_remove,
             commands::broker_respond,
+            commands::broker_unlock_waiting,
             #[cfg(all(desktop, not(windows)))]
             commands::broker_verify,
             commands::open_extension_folder,
+            commands::open_firefox_addon,
             commands::windows_passkeys_status,
             commands::windows_passkeys_setup,
             commands::windows_passkeys_pair,

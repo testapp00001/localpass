@@ -1,17 +1,16 @@
 // The extension's side of the page's WebAuthn calls. `inject.ts` (running in the page) turns
-// navigator.credentials.create/get into messages; this answers them: it asks the user (a dialog
-// or the field's menu), has LocalPass create or sign, and sends the result back. When LocalPass
-// can't or shouldn't handle a call, it says so and the page falls back to the browser's own flow.
+// navigator.credentials.create/get into messages; this answers them: the background shows the request in
+// LocalPass's own panel (or a window), the user decides there, LocalPass creates or signs, and the result
+// comes back as the reply to this script's `decide` message (background/decide.ts). Nothing is drawn into
+// the page. When LocalPass can't or shouldn't handle a call, it says so and the page falls back to the
+// browser's own flow.
 
-import { displayText } from "../shared/limits";
-import type { DecisionRequest, PasskeyAssertion, PasskeyCreateInput, PasskeyCreated } from "../shared/messages";
-import { BrokerError, type PasskeyCandidate } from "../shared/protocol";
-import { createDialogLines, describePasskey as describe } from "../shared/shown";
-import { ask } from "./ask";
-import { type Sheet, showSheet } from "./ui";
+import type { DecisionRequest, PasskeyAssertion, PasskeyCreateInput, PasskeyCreated, PasskeyGetParams } from "../shared/messages";
+import { BrokerError } from "../shared/protocol";
+import { ask, askDecision } from "./ask";
 import { type GetInput, checkCreate, checkGet } from "./validate";
 
-/** Set by `bun run build --firefox`: there the user decides in a LocalPass window, not in the page. */
+/** Set by `bun run build --firefox`. */
 declare const __FIREFOX__: boolean;
 
 /** What the page posted: nothing in it is trusted until `validate.ts` has checked it. */
@@ -25,10 +24,9 @@ interface PageRequest {
 type Refusal = { ok: false; name: string; message: string };
 type Outcome = { ok: true; result: PasskeyCreated | PasskeyAssertion } | Refusal | { fallback: true };
 
-/** LocalPass can't be used right now (not connected, not paired, ...): let the browser handle it. */
-const UNAVAILABLE = new Set(["unpaired", "appNotRunning", "disconnected", "denied", "untrusted", "error", "noVault", "offline", "timeout"]);
-
-const open = new Map<string, { sheet?: Sheet }>();
+/** The page requests a LocalPass decision is open for (a `decideCancel` withdraws them). */
+const open = new Set<string>();
+/** Chrome: the page's pending passkey sign-in from a field (conditional mediation), offered in the login picker. */
 let conditional: { id: string; payload: GetInput } | null = null;
 
 function post(id: string, body: Outcome) {
@@ -36,10 +34,8 @@ function post(id: string, body: Outcome) {
 }
 
 function finish(id: string, body: Outcome) {
-  const entry = open.get(id);
-  if (!entry && !(conditional?.id === id)) return;
+  if (!open.has(id) && conditional?.id !== id) return;
   open.delete(id);
-  entry?.sheet?.close();
   if (conditional?.id === id) conditional = null;
   post(id, body);
 }
@@ -79,18 +75,15 @@ async function usable(): Promise<boolean> {
   }
 }
 
-// ---- create ----
-
-export { createDialogLines };
-
 /**
- * Firefox: the background opens a LocalPass window, the user decides there, and the outcome comes back
- * as the reply (see background/decide.ts). Nothing is drawn into the page.
+ * The background shows the request in the LocalPass toolbar panel (a window where the panel cannot be opened
+ * without a click), the user decides there, and the outcome comes back as the reply. A request whose panel
+ * was closed waits (badge on the toolbar icon) until it ends.
  */
-async function viaWindow(id: string, request: DecisionRequest) {
-  open.set(id, {});
+async function viaPanel(id: string, request: DecisionRequest) {
+  open.add(id);
   try {
-    finish(id, { ok: true, result: await ask<PasskeyCreated | PasskeyAssertion>({ kind: "decide", ref: id, request }) });
+    finish(id, { ok: true, result: await askDecision<PasskeyCreated | PasskeyAssertion>(id, request) });
   } catch (e) {
     finish(id, e instanceof BrokerError && e.code === "fallback" ? { fallback: true } : failure(e));
   }
@@ -98,99 +91,22 @@ async function viaWindow(id: string, request: DecisionRequest) {
 
 async function startCreate(id: string, p: PasskeyCreateInput) {
   if (!(await usable())) return post(id, { fallback: true });
-  if (__FIREFOX__) return viaWindow(id, { decision: "passkeyCreate", request: p });
-  const cancelled: Refusal = { ok: false, name: "NotAllowedError", message: "The user cancelled the request." };
-  const sheet = showSheet("Create a passkey?", () => finish(id, cancelled));
-  open.set(id, { sheet });
-  sheet.setBody(createDialogLines(p, location.hostname));
-  const create = async () => {
-    sheet.setBody(["Waiting for LocalPass…", "Confirm with Windows Hello if it asks."]);
-    sheet.setButtons([{ label: "Cancel", onClick: () => finish(id, cancelled) }]);
-    try {
-      const result = await ask<PasskeyCreated>({ kind: "passkeyCreate", request: p });
-      finish(id, { ok: true, result });
-    } catch (e) {
-      const outcome = failure(e);
-      if (e instanceof BrokerError && e.code === "denied") {
-        // The user said no (to Windows Hello, or to replacing the passkey already saved): that is
-        // the answer. Nothing was changed, and nothing here tries again or offers a quiet detour.
-        sheet.setBody(["Nothing was changed.", displayText(outcome.message, 200)]);
-        sheet.setButtons([{ label: "Close", onClick: () => finish(id, outcome) }]);
-        return;
-      }
-      sheet.setBody(["Could not create the passkey.", displayText(outcome.message, 200)]);
-      sheet.setButtons([
-        { label: "Use another method", onClick: () => finish(id, { fallback: true }) },
-        { label: "Close", onClick: () => finish(id, outcome) },
-      ]);
-    }
-  };
-  sheet.setButtons([
-    { label: "Create passkey", primary: true, onClick: () => void create() },
-    { label: "Use another method", onClick: () => finish(id, { fallback: true }) },
-  ]);
-}
-
-// ---- sign in ----
-
-async function sign(id: string, p: GetInput, candidate: PasskeyCandidate) {
-  const result = await ask<PasskeyAssertion>({ kind: "passkeyAssert", itemId: candidate.itemId, rpId: p.rpId, challenge: p.challenge, uv: p.uv });
-  finish(id, { ok: true, result });
+  return viaPanel(id, { decision: "passkeyCreate", request: p });
 }
 
 async function startGet(id: string, p: GetInput) {
   if (!(await enabled())) return post(id, { fallback: true });
-  // Firefox has no menu in the page: a conditional request is left to the browser at once (parking it
-  // would leave the page waiting for a menu that never comes).
-  if (__FIREFOX__ && p.conditional) return post(id, { fallback: true });
-  if (p.conditional) return startConditional(id, p);
+  if (p.conditional) {
+    // Firefox: a conditional request is left to the browser at once (its login picker offers no passkeys, and
+    // parking it would leave the page waiting for a choice that never comes).
+    if (__FIREFOX__) return post(id, { fallback: true });
+    return startConditional(id, p);
+  }
   if (!(await usable())) return post(id, { fallback: true });
-  if (__FIREFOX__) return viaWindow(id, { decision: "passkeyGet", rpId: p.rpId, allow: p.allow, challenge: p.challenge, uv: p.uv });
-  const cancelled: Refusal = { ok: false, name: "NotAllowedError", message: "The user cancelled the request." };
-  const sheet = showSheet("Sign in with a passkey", () => finish(id, cancelled));
-  open.set(id, { sheet });
-  sheet.setBody(["Looking for your passkeys…"]);
-  const other = { label: "Use another method", onClick: () => finish(id, { fallback: true }) };
-  const load = async (): Promise<void> => {
-    let found: PasskeyCandidate[];
-    try {
-      found = await ask<PasskeyCandidate[]>({ kind: "passkeyCandidates", rpId: p.rpId, allow: p.allow });
-    } catch (e) {
-      const code = e instanceof BrokerError ? e.code : "internal";
-      if (code === "locked") {
-        sheet.setBody(["LocalPass is locked.", "Unlock it to use your passkeys."]);
-        sheet.setButtons([
-          { label: "Unlock", primary: true, onClick: () => void ask({ kind: "unlock" }).then(load, () => load()) },
-          other,
-        ]);
-        return;
-      }
-      if (UNAVAILABLE.has(code)) return finish(id, { fallback: true });
-      return finish(id, failure(e));
-    }
-    if (!found.length) return finish(id, { fallback: true });
-    sheet.setBody([displayText(p.rpId || location.hostname, 253), "Choose a passkey to sign in with:"]);
-    sheet.setRows(
-      found.map((c) => ({
-        ...describe(c),
-        onSelect: () => {
-          sheet.setRows([]);
-          sheet.setBody(["Waiting for LocalPass…", "Confirm with Windows Hello if it asks."]);
-          sheet.setButtons([{ label: "Cancel", onClick: () => finish(id, cancelled) }]);
-          sign(id, p, c).catch((e) => {
-            const outcome = failure(e);
-            sheet.setBody(["Could not sign in.", displayText(outcome.message, 200)]);
-            sheet.setButtons([other, { label: "Close", onClick: () => finish(id, outcome) }]);
-          });
-        },
-      })),
-    );
-    sheet.setButtons([other]);
-  };
-  await load();
+  return viaPanel(id, { decision: "passkeyGet", rpId: p.rpId, allow: p.allow, challenge: p.challenge, uv: p.uv });
 }
 
-// ---- sign in from a field's menu (conditional mediation) ----
+// ---- sign in from a field (conditional mediation, Chrome) ----
 
 function startConditional(id: string, p: GetInput) {
   // A newer request replaces an older one.
@@ -198,39 +114,29 @@ function startConditional(id: string, p: GetInput) {
   conditional = { id, payload: p };
 }
 
-/** True while the page is waiting for a passkey to be picked from a field's menu. */
+/** True while the page is waiting for a passkey to be picked from a field. */
 export function conditionalPending(): boolean {
   return conditional !== null;
 }
 
-/** The passkeys to list in the field menu (empty when locked or none match). */
-export async function conditionalCandidates(): Promise<PasskeyCandidate[]> {
-  if (!conditional) return [];
-  try {
-    return await ask<PasskeyCandidate[]>({ kind: "passkeyCandidates", rpId: conditional.payload.rpId, allow: conditional.payload.allow });
-  } catch {
-    return [];
-  }
+/**
+ * The pending conditional request, for the login picker (which lists the site's passkeys for it): its id and
+ * the checked parameters, never anything else the page posted.
+ */
+export function conditionalRequest(): { id: string; params: PasskeyGetParams } | null {
+  if (!conditional) return null;
+  const { rpId, allow, challenge, uv } = conditional.payload;
+  return { id: conditional.id, params: { rpId, allow, challenge, uv } };
 }
 
-export function passkeyRow(candidate: PasskeyCandidate): { label: string; sub: string; onSelect: () => void } {
-  const text = describe(candidate);
-  return {
-    label: `Passkey: ${text.label}`,
-    sub: text.sub,
-    onSelect: () => void completeConditional(candidate),
-  };
-}
-
-async function completeConditional(candidate: PasskeyCandidate) {
-  const current = conditional;
-  if (!current) return;
-  try {
-    await sign(current.id, current.payload, candidate);
-  } catch (e) {
-    // Leave the request pending so the user can pick again; the page isn't told about a refusal.
-    console.warn("passkey sign-in failed", e);
-  }
+/**
+ * The user chose a passkey in the picker: the signature answers the page's pending request, if it is still
+ * the one the picker was asked for (the page may have withdrawn or replaced it meanwhile: then nothing is sent).
+ */
+export function resolveConditional(id: string, assertion: PasskeyAssertion): boolean {
+  if (conditional?.id !== id) return false;
+  finish(id, { ok: true, result: assertion });
+  return true;
 }
 
 // ---- the bridge to the page ----
@@ -258,8 +164,7 @@ export function installPasskeyBridge() {
     } else if (data.op === "cancel") {
       const target = (data.payload as { target?: unknown } | null)?.target;
       if (typeof target !== "string") return;
-      open.get(target)?.sheet?.close();
-      if (__FIREFOX__ && open.has(target)) void ask({ kind: "decideCancel", ref: target }).catch(() => {});
+      if (open.has(target)) void ask({ kind: "decideCancel", ref: target }).catch(() => {});
       open.delete(target);
       if (conditional?.id === target) conditional = null;
     }

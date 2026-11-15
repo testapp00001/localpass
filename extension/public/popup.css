@@ -17,10 +17,14 @@ button:disabled { opacity: .6; cursor: default; }
 input[type="search"] { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: inherit; font: inherit; margin-bottom: 8px; }
 .code { font: 700 26px/1.2 ui-monospace, Consolas, monospace; letter-spacing: .15em; text-align: center; margin: 12px 0; }
 .list { list-style: none; margin: 0; padding: 0; }
-.list li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; }
+.list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; }
 .list li:hover { background: var(--hover); }
 .list .who { flex: 1; min-width: 0; }
 .list .who b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .list .who span { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.error { color: #b91c1c; }
-@media (prefers-color-scheme: dark) { .error { color: #fca5a5; } }
+.error, .list .who span.error { color: #b91c1c; white-space: normal; }
+@media (prefers-color-scheme: dark) { .error, .list .who span.error { color: #fca5a5; } }
+.confirm { flex-basis: 100%; }
+.confirm p { margin: 0 0 6px; }
+.actions { display: flex; gap: 8px; }
+main:focus { outline: none; }

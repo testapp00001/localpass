@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Copy } from "lucide-react";
-import { api, type TotpCode as Code } from "../lib/api";
+import { api, errorText, type TotpCode as Code } from "../lib/api";
 import { IconButton } from "./ui";
 import { useToast } from "./Toaster";
 
@@ -48,7 +48,12 @@ export function TotpCode({ itemId }: { itemId: string }) {
         />
       </svg>
       <span className="text-xs tabular-nums text-slate-500">{code.remaining}s</span>
-      <IconButton label="Copy code" onClick={() => api.copyField(itemId, "totp").then(() => toast("Code copied"))}>
+      <IconButton label="Copy code" onClick={() =>
+          api
+            .copyField(itemId, "totp")
+            .then(() => toast("Code copied"))
+            .catch((e) => toast(errorText(e), "error"))
+        }>
         <Copy className="size-4" />
       </IconButton>
     </div>

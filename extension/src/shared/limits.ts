@@ -40,8 +40,18 @@ export function isB64u(text: unknown): text is string {
 
 // Control characters, and line and paragraph separators: shown as a space.
 const CONTROL = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]", "g");
-// Characters with no width, or that reorder or hide the text around them: dropped.
-const INVISIBLE = new RegExp("[\\u00ad\\u061c\\u180e\\u200b-\\u200f\\u202a-\\u202e\\u2060-\\u206f\\ufeff\\ufff9-\\ufffb]", "g");
+// Characters with no width, or that reorder or hide the text around them: dropped. Every format (Cf) character of
+// Unicode 17 (soft hyphen, number signs and marks that join the text after them, zero-width and direction marks,
+// bidi embeddings and isolates, invisible operators, the byte order mark, the interlinear annotation marks,
+// Egyptian hieroglyph and shorthand format controls, musical beams, the tag characters), plus the combining
+// grapheme joiner and the Hangul fillers (blank letters). The same set as `is_invisible` in lp-broker's server.rs,
+// which drops the line and paragraph separators too (here `CONTROL` turns them into spaces).
+const INVISIBLE = new RegExp(
+  "[\\u{00ad}\\u{034f}\\u{0600}-\\u{0605}\\u{061c}\\u{06dd}\\u{070f}\\u{0890}-\\u{0891}\\u{08e2}\\u{115f}-\\u{1160}\\u{180e}" +
+    "\\u{200b}-\\u{200f}\\u{202a}-\\u{202e}\\u{2060}-\\u{206f}\\u{3164}\\u{feff}\\u{ffa0}\\u{fff9}-\\u{fffb}" +
+    "\\u{110bd}\\u{110cd}\\u{13430}-\\u{1343f}\\u{1bca0}-\\u{1bca3}\\u{1d173}-\\u{1d17a}\\u{e0000}-\\u{e007f}]",
+  "gu",
+);
 
 /**
  * Text from a page, made safe to show: control characters and the invisible characters that

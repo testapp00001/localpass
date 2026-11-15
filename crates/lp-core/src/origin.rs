@@ -122,12 +122,9 @@ fn is_loopback(host: &str) -> bool {
         || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
-/// How a saved login's URL matches `origin`, if it does.
-///
-/// A saved URL without a scheme counts as https. A saved `http://` URL still matches the https
-/// site (the usual upgrade), but a saved https URL never matches a plain-http page except on
-/// loopback. A port in the saved URL must equal the page's port; without one any port matches.
-pub fn match_login(saved_url: &str, origin: &Origin) -> Option<MatchKind> {
+/// A saved login's URL as a web address: a missing scheme counts as https, and only http and https
+/// are accepted.
+fn parse_saved_url(saved_url: &str) -> Option<Url> {
     let text = saved_url.trim();
     if text.is_empty() {
         return None;
@@ -135,10 +132,54 @@ pub fn match_login(saved_url: &str, origin: &Origin) -> Option<MatchKind> {
     let url = Url::parse(text)
         .ok()
         .filter(|u| u.host().is_some())
-        .or_else(|| Url::parse(&format!("https://{text}")).ok())?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return None;
+        // An address that names a scheme is not "missing" one (`https://` alone is not the host `https`).
+        .or_else(|| {
+            if text.contains("://") {
+                return None;
+            }
+            Url::parse(&format!("https://{text}")).ok()
+        })?;
+    matches!(url.scheme(), "http" | "https").then_some(url)
+}
+
+/// A name for the website a saved URL belongs to, so that logins saved twice for one site can be
+/// found. The URL is read as [`match_login`] reads it, and the scheme is ignored (an `http://` copy
+/// and an `https://` copy are one site, as for filling).
+///
+/// The key is the host in lower case without a trailing dot and without a leading `www.`, with
+/// `:port` when the URL names a port other than the scheme's default. With `include_subdomains` the
+/// host is cut to its registrable domain (`login.example.co.uk` becomes `example.co.uk`); IP addresses,
+/// `localhost` and other names without a registrable domain keep their host. `None` for an empty or
+/// unreadable address.
+pub fn site_key(saved_url: &str, include_subdomains: bool) -> Option<String> {
+    let url = parse_saved_url(saved_url)?;
+    let (host, is_ip) = normalized_host(&url)?;
+    let mut host = match host.strip_prefix("www.") {
+        Some(rest) if !is_ip && !rest.is_empty() => rest.to_string(),
+        _ => host,
+    };
+    if include_subdomains
+        && !is_ip
+        && let Some(domain) = psl::domain_str(&host)
+    {
+        host = domain.to_string();
     }
+    if host.contains(':') {
+        host = format!("[{host}]");
+    }
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
+}
+
+/// How a saved login's URL matches `origin`, if it does.
+///
+/// A saved URL without a scheme counts as https. A saved `http://` URL still matches the https
+/// site (the usual upgrade), but a saved https URL never matches a plain-http page except on
+/// loopback. A port in the saved URL must equal the page's port; without one any port matches.
+pub fn match_login(saved_url: &str, origin: &Origin) -> Option<MatchKind> {
+    let url = parse_saved_url(saved_url)?;
     let (host, is_ip) = normalized_host(&url)?;
     if let Some(port) = url.port()
         && origin.port != Some(port)
@@ -451,5 +492,89 @@ mod tests {
         }
         let max = format!("https://{}.com", "a".repeat(63));
         assert!(Origin::parse(&max).is_ok());
+    }
+
+    #[test]
+    fn site_keys_name_the_website_of_a_saved_url() {
+        let own = |url: &str| site_key(url, false);
+        let all = |url: &str| site_key(url, true);
+        // The scheme, the path, case, a trailing dot and a leading `www.` do not matter.
+        for url in [
+            "example.com",
+            "https://example.com/login?next=/a",
+            "http://Example.COM",
+            "https://www.example.com",
+            "WWW.EXAMPLE.COM.",
+            "  https://example.com:443/  ",
+        ] {
+            assert_eq!(own(url).as_deref(), Some("example.com"), "{url}");
+            assert_eq!(all(url).as_deref(), Some("example.com"), "{url}");
+        }
+        // Other subdomains are their own site unless the option is on.
+        assert_eq!(
+            own("https://a.example.com").as_deref(),
+            Some("a.example.com")
+        );
+        assert_eq!(all("https://a.example.com").as_deref(), Some("example.com"));
+        assert_eq!(
+            all("https://www.b.example.com").as_deref(),
+            Some("example.com")
+        );
+        // Only one `www.` is dropped.
+        assert_eq!(
+            own("https://www.www.example.com").as_deref(),
+            Some("www.example.com")
+        );
+        // The public suffix list decides what a registrable domain is.
+        assert_eq!(
+            all("https://shop.example.co.uk").as_deref(),
+            Some("example.co.uk")
+        );
+        assert_eq!(
+            own("https://shop.example.co.uk").as_deref(),
+            Some("shop.example.co.uk")
+        );
+        assert_eq!(
+            all("https://alice.github.io").as_deref(),
+            Some("alice.github.io")
+        );
+        assert_ne!(all("https://alice.github.io"), all("https://bob.github.io"));
+        // A port other than the default is part of the site.
+        assert_eq!(
+            own("https://example.com:8443").as_deref(),
+            Some("example.com:8443")
+        );
+        assert_eq!(
+            all("https://a.example.com:8443").as_deref(),
+            Some("example.com:8443")
+        );
+        assert_eq!(own("example.com:8443").as_deref(), Some("example.com:8443"));
+        assert_eq!(own("http://example.com:80").as_deref(), Some("example.com"));
+        assert_ne!(own("https://example.com:8443"), own("https://example.com"));
+        // IP addresses, localhost and single labels keep their host.
+        for (url, expected) in [
+            ("https://192.168.1.10", "192.168.1.10"),
+            ("192.168.1.10:8443", "192.168.1.10:8443"),
+            ("http://localhost:3000", "localhost:3000"),
+            ("http://nas", "nas"),
+            ("https://[2001:db8::1]:8443/x", "[2001:db8::1]:8443"),
+            ("https://[2001:db8::1]", "[2001:db8::1]"),
+        ] {
+            assert_eq!(own(url).as_deref(), Some(expected), "{url}");
+            assert_eq!(all(url).as_deref(), Some(expected), "{url}");
+        }
+        // A bare suffix has no registrable domain, so it stays as it is.
+        assert_eq!(all("https://co.uk").as_deref(), Some("co.uk"));
+        // Nothing to compare for these.
+        for url in [
+            "",
+            "   ",
+            "ftp://example.com",
+            "javascript:alert(1)",
+            "https://",
+        ] {
+            assert_eq!(own(url), None, "{url:?}");
+            assert_eq!(all(url), None, "{url:?}");
+        }
     }
 }

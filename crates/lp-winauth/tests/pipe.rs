@@ -43,11 +43,14 @@ fn release_build() -> bool {
 }
 
 fn dev_host_path() -> PathBuf {
-    // target/<profile>/deps/<test>.exe -> target/<profile>/examples/dev_host.exe
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    path.pop();
-    path.join("examples").join("dev_host.exe")
+    // Cargo can place this test in deps/ or build/<crate>/<hash>/out/.
+    std::env::current_exe()
+        .unwrap()
+        .ancestors()
+        .skip(1)
+        .map(|dir| dir.join("examples").join("dev_host.exe"))
+        .find(|path| path.is_file())
+        .expect("build the helper first: cargo build -p lp-broker --example dev_host")
 }
 
 fn build_dev_host() {

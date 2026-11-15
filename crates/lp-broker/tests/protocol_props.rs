@@ -57,6 +57,10 @@ fn known_requests() -> Vec<(&'static str, Value)> {
             "saveLogin",
             json!({"op": "saveLogin", "origin": origin, "username": "u", "password": "p"}),
         ),
+        (
+            "checkLogin",
+            json!({"op": "checkLogin", "origin": origin, "username": "u", "password": "p"}),
+        ),
         ("generatePassword", json!({"op": "generatePassword"})),
         (
             "passkeyCandidates",
@@ -97,10 +101,11 @@ fn classify(request: &Request) -> (usize, bool, bool, bool) {
         Request::PasskeyCreate { .. } => (10, true, false, true),
         Request::PasskeyAssert { .. } => (11, true, false, true),
         Request::PasskeyAssertAny { .. } => (12, true, true, true),
+        Request::CheckLogin { .. } => (13, false, false, false),
     }
 }
 
-const REQUEST_KINDS: usize = 13;
+const REQUEST_KINDS: usize = 14;
 
 #[test]
 fn provider_allow_list_is_exhaustive() {

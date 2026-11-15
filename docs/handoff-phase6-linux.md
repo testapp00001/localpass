@@ -1,9 +1,11 @@
 # Handoff: Phase 6, LocalPass on Fedora Linux + Firefox
 
-The approved plan is `docs/phase6-linux-plan.md` (a copy of the plan file; tasks 6.0-6.7, with the design of each). This
+The approved plan is `docs/plans/2026-10-28-phase6-linux.md` (tasks 6.0-6.7, with the design of each). This
 file holds the state; do not rely on conversation history.
 
-## RESUME HERE (state saved 2026-10-28)
+## RESUME HERE (state saved 2026-10-28, closed 2026-10-31)
+
+**Phase 6 is closed (2026-10-31): the user tested and approved v0.2.2. Work continues in Phase 7: `docs/handoff-phase7.md`.** What is left here is optional and listed under "Closing report (6.7)" below. The rest of this file is the record of Phase 6.
 
 Decisions (2026-10-28): Firefox (Fedora RPM) as the browser; "is it you?" check = master password only
 (no polkit, no keyring quick unlock); RPM built by GitHub Actions plus a Linux CI job; Firefox
@@ -11,7 +13,7 @@ extension signed by Mozilla (unlisted, `web-ext sign --channel unlisted`, the us
 account and the repo secrets `AMO_JWT_ISSUER`/`AMO_JWT_SECRET`). The Fedora laptop is also the dev
 machine for desktop + extension; Android releases stay in CI, Windows checks happen on the work laptop.
 
-Rules: one task per fresh chat; builds in the background; no agents except the security review; never
+Rules: one task per fresh chat; builds in the background; agents only for an independent look (`CLAUDE.md`, "Working with agents"); never
 create the real vault on this laptop before 6.7 (experiments use `LOCALPASS_PROFILE=dev`, the
 device-secret format changes in 6.2); tests never touch the real keyring or `~/.mozilla`; never commit
 unless asked.
@@ -26,7 +28,7 @@ Checked from the draft: RPM and XPI hashes match SHA256SUMS; the XPI has `META-I
 into a throwaway Firefox 158 profile it is active with `signedState 2` and survives a restart. NOT done: publishing the draft (the user's step), a real
 `sudo dnf install` + tray/GUI on this desktop, the real-keyring test, L1's real path, I1 (pin `fedora:44` digest; the job has now run once).
 
-## Next: 6.7 (move the home laptop over, assisted) and the open items below, fresh chat
+## Open items from 6.5/6.6 (written before 6.7 was done; see "Closing report (6.7)" for what is still open)
 
 **6.6d is done (2026-10-30)**: security review in `docs/phase6-security-review.md` (no High/Medium; L1-L4 fixed, see 6.6d entry), README
 "Firefox on Fedora Linux" + three Security-notes bullets + install text, and the `firefox` job in `release.yml` (pinned `web-ext` 8.10.0 as an extension
@@ -288,4 +290,30 @@ AMO secrets `AMO_JWT_ISSUER`/`AMO_JWT_SECRET` are set in the repo (2026-10-30); 
     (`lp-broker` `create_reason`, also the Windows Hello text; two tests updated); L4 the data directory is chmod 0700 at start (unix, not Android).
     `cargo test -p lp-broker -p localpass` and `cargo clippy -p lp-broker -p localpass --all-targets -D warnings` pass; Windows/Android builds unverified (CI).
     Extension: `web-ext` is now an exact-pinned devDependency (bun blocks its postinstall; nothing needs it).
-- [ ] 6.7 Move the home laptop over (assisted)
+- [x] 6.7 Move the home laptop over (assisted). Done by the user; approved 2026-10-31 ("i have tested and approve v0.2.2"). Report below.
+
+## Closing report (6.7), 2026-10-31
+
+What the user said: v0.2.2 was tested and approved. This tree holds no list of the individual 6.7 checks (install, pairing with the phone, revoking the
+old Windows home laptop, sync home/phone/work, the Firefox checks), so none is claimed here beyond that approval.
+
+Releases: `v0.2.2` (`d4eb731`, which adds the dark-theme fix for native controls `d9c66bd` to what `v0.2.1` had) is tagged and pushed. `git ls-remote --tags origin` lists only
+`v0.2.0` and `v0.2.2` on 2026-10-31, and so does the local clone: the `v0.2.1` tag that the section above records is no longer there (probably replaced by `v0.2.2`; not verified).
+Whether the draft release is published is the user's step and is not recorded.
+
+Seen on this laptop at the start of the Phase 7 session (read-only, nothing changed): a real vault in the default profile
+(`~/.local/share/app.localpass/`: `vault.db`, `device.key`, `broker-clients.bin`, `settings.json` with start at login on and the dark theme), no other profiles than
+the throwaway `dev` and `dev2`, `/usr/bin/localpass` registered in `~/.mozilla/native-messaging-hosts/app.localpass.host.json` for `localpass@localpass.local`, an
+autostart entry `~/.config/autostart/localpass.desktop`, and `rpm -q localpass` printing `localpass-0.2.1-1.x86_64`. The approved build is v0.2.2, so check which one is
+installed before relying on it. Firefox's `extensions.json` under `~/.mozilla/firefox` did not list the add-on id when searched; the user's Firefox may use another
+profile location, so this is noted, not concluded.
+
+Still open, all optional (none blocks Phase 7):
+- **I1** pin the `linux` release job's `fedora:44` by digest. The job has now run, so it can be done: `docker.io/library/fedora:44` is
+  `sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80` on 2026-10-31 (the Fedora registry's image has a different digest; the job pulls Docker Hub's).
+  Use `container: fedora:44@sha256:...` and write the refresh step next to it.
+- **L1's real path** (Firefox closed, app not running, the extension makes the helper start the app; the app's log must not reach Firefox, the extension must connect on the first try).
+- Re-run the real-keyring test by hand: `cargo test -p lp-engine --features keyring --lib secret_service_keeps_one_key_per_profile -- --ignored` (throwaway entries only), and the
+  L5 refusal path, which has no automated test.
+- Android could not be compiled on this laptop (no NDK); CI covers it.
+- Windows final matrix 5.6 stays on the work laptop (`docs/handoff-phase4-5.md`).

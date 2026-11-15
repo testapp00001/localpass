@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, FileUp, Fingerprint, KeyRound, LogOut, Upload } from "lucide-react";
+import { Copy, Download, FileUp, Fingerprint, KeyRound, LogOut, Upload } from "lucide-react";
 import { ask, open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, errorText, type AppInfo, type ImportReport, type Settings as AppSettings } from "../lib/api";
@@ -21,7 +21,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: () => void }) {
+export function Settings({ info, onInfoChange, onOpenDuplicates }: { info: AppInfo; onInfoChange: () => void; onOpenDuplicates: () => void }) {
   const toast = useToast();
   const [s, setS] = useState<AppSettings>(info.settings);
   const [deviceName, setDeviceName] = useState(info.deviceName ?? "");
@@ -90,9 +90,12 @@ export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: 
       "This deletes the vault from this device only. Your other devices keep their data. If this is your only device, export a backup first.",
       { title: "Remove vault from this device", kind: "warning" },
     );
-    if (ok) {
+    if (!ok) return;
+    try {
       await api.leaveVault();
       onInfoChange();
+    } catch (e) {
+      toast(errorText(e), "error");
     }
   };
 
@@ -103,7 +106,7 @@ export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: 
       <Section title="Security">
         <div className="flex items-center justify-between gap-4 px-4 py-3">
           <span className="text-sm font-medium">Lock after inactivity</span>
-          <Select value={String(s.autoLockMinutes)} onChange={(e) => update({ autoLockMinutes: Number(e.target.value) })} className="w-40">
+          <Select aria-label="Lock after inactivity" value={String(s.autoLockMinutes)} onChange={(e) => update({ autoLockMinutes: Number(e.target.value) })} className="w-40">
             {[1, 5, 15, 30, 60].map((m) => (
               <option key={m} value={m}>
                 {m} minute{m === 1 ? "" : "s"}
@@ -117,7 +120,7 @@ export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: 
         )}
         <div className="flex items-center justify-between gap-4 px-4 py-3">
           <span className="text-sm font-medium">Clear copied passwords</span>
-          <Select value={String(s.clipboardClearSeconds)} onChange={(e) => update({ clipboardClearSeconds: Number(e.target.value) })} className="w-40">
+          <Select aria-label="Clear copied passwords" value={String(s.clipboardClearSeconds)} onChange={(e) => update({ clipboardClearSeconds: Number(e.target.value) })} className="w-40">
             {[15, 30, 60, 120].map((n) => (
               <option key={n} value={n}>
                 after {n} s
@@ -168,7 +171,7 @@ export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: 
           </div>
           <div className="flex items-center justify-between gap-4 px-4 py-3">
             <span className="text-sm font-medium">Theme</span>
-            <Select value={s.theme} onChange={(e) => update({ theme: e.target.value as AppSettings["theme"] })} className="w-40">
+            <Select aria-label="Theme" value={s.theme} onChange={(e) => update({ theme: e.target.value as AppSettings["theme"] })} className="w-40">
               <option value="system">System</option>
               <option value="light">Light</option>
               <option value="dark">Dark</option>
@@ -190,6 +193,18 @@ export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: 
             }
           >
             Save
+          </Button>
+        </div>
+      </Section>
+
+      <Section title="Vault tools">
+        <div className="flex items-center justify-between gap-4 px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-sm font-medium">Find duplicate logins</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">Logins saved twice with the same username and password for one website.</div>
+          </div>
+          <Button onClick={onOpenDuplicates}>
+            <Copy className="size-4" /> Find…
           </Button>
         </div>
       </Section>
@@ -237,7 +252,7 @@ export function Settings({ info, onInfoChange }: { info: AppInfo; onInfoChange: 
         LocalPass {info.version} · Everything stays on your devices
         {" · "}
         {/* A plain link: the browser opens it when you click. The app itself never asks the internet for updates. */}
-        <button type="button" className="underline hover:text-slate-600 dark:hover:text-slate-300" onClick={() => openUrl(RELEASES_URL)}>
+        <button type="button" className="underline hover:text-slate-600 dark:hover:text-slate-300" onClick={() => openUrl(RELEASES_URL).catch((e) => toast(errorText(e), "error"))}>
           Releases
         </button>
         {info.quickUnlock.kind === "windowsHello" && !info.quickUnlock.available && (

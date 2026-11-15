@@ -35,6 +35,8 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
   const [shown, setShown] = useState<Record<string, boolean>>({});
   const [showHistory, setShowHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Trash, restore or delete is running: their buttons are busy (no second press).
+  const [acting, setActing] = useState(false);
 
   const load = () =>
     api
@@ -73,17 +75,43 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
   const toggle = (k: string) => setShown((s) => ({ ...s, [k]: !s[k] }));
   const secret = (k: string, value: string) => (shown[k] ? <span className="secret">{value}</span> : <span className="secret text-slate-400">••••••••••••</span>);
 
+  const fail = (e: unknown) => toast(errorText(e), "error");
   const trash = async () => {
-    await api.trashItem(item.id);
+    setActing(true);
+    try {
+      await api.trashItem(item.id);
+    } catch (e) {
+      return fail(e);
+    } finally {
+      setActing(false);
+    }
     toast("Moved to trash");
     onGone();
   };
-  const purge = async () => {
-    if (await ask(`Delete “${item.title}” permanently from all your devices?`, { title: "Delete forever", kind: "warning" })) {
-      await api.purgeItem(item.id);
-      toast("Deleted");
-      onGone();
+  const restore = async () => {
+    setActing(true);
+    try {
+      await api.restoreItem(item.id);
+    } catch (e) {
+      return fail(e);
+    } finally {
+      setActing(false);
     }
+    toast("Restored");
+    load();
+  };
+  const purge = async () => {
+    setActing(true);
+    try {
+      if (!(await ask(`Delete “${item.title}” permanently from all your devices?`, { title: "Delete forever", kind: "warning" }))) return;
+      await api.purgeItem(item.id);
+    } catch (e) {
+      return fail(e);
+    } finally {
+      setActing(false);
+    }
+    toast("Deleted");
+    onGone();
   };
 
   return (
@@ -102,7 +130,7 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
           <>
             <IconButton
               label={item.favorite ? "Remove from favorites" : "Add to favorites"}
-              onClick={() => api.setFavorite(item.id, !item.favorite).then(load)}
+              onClick={() => api.setFavorite(item.id, !item.favorite).then(load).catch(fail)}
             >
               <Star className={`size-5 ${item.favorite ? "fill-amber-400 text-amber-400" : ""}`} />
             </IconButton>
@@ -127,7 +155,7 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
                 <div key={a.op} className="flex items-center gap-2 rounded-lg bg-white/70 px-3 py-2 dark:bg-slate-900/60">
                   <span className="secret min-w-0 flex-1 truncate">{shown[`c-${a.op}`] ? a.value : "••••••••"}</span>
                   <span className="shrink-0 text-xs text-slate-500">{a.device}</span>
-                  <IconButton label="Show" onClick={() => toggle(`c-${a.op}`)}>
+                  <IconButton label={shown[`c-${a.op}`] ? "Hide" : "Show"} onClick={() => toggle(`c-${a.op}`)}>
                     {shown[`c-${a.op}`] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </IconButton>
                   <Button
@@ -181,7 +209,7 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
               label={i === 0 ? "Website" : "Website " + (i + 1)}
               actions={
                 href && (
-                  <IconButton label="Open in browser" onClick={() => openUrl(href)}>
+                  <IconButton label="Open in browser" onClick={() => openUrl(href).catch(fail)}>
                     <ExternalLink className="size-4" />
                   </IconButton>
                 )
@@ -212,7 +240,7 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
                 label={item.card.brand || "Card number"}
                 actions={
                   <>
-                    <IconButton label="Show" onClick={() => toggle("card")}>
+                    <IconButton label={shown.card ? "Hide card number" : "Show card number"} onClick={() => toggle("card")}>
                       {shown.card ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                     </IconButton>
                     {copyButton("card.number", "Card number")}
@@ -241,7 +269,7 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
             actions={
               <>
                 {f.hidden && (
-                  <IconButton label="Show" onClick={() => toggle(`f-${f.id}`)}>
+                  <IconButton label={shown[`f-${f.id}`] ? "Hide" : "Show"} onClick={() => toggle(`f-${f.id}`)}>
                     {shown[`f-${f.id}`] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </IconButton>
                 )}
@@ -252,11 +280,26 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
             {f.hidden ? secret(`f-${f.id}`, f.value) : f.value}
           </Row>
         ))}
-        {item.notes && (
-          <Row label="Notes">
-            <p className="whitespace-pre-wrap">{item.notes}</p>
-          </Row>
-        )}
+        {item.notes &&
+          (item.kind === "note" ? (
+            <Row
+              label="Notes"
+              actions={
+                <>
+                  <IconButton label={shown.notes ? "Hide note" : "Show note"} onClick={() => toggle("notes")}>
+                    {shown.notes ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                  </IconButton>
+                  {copyButton("notes", "Note")}
+                </>
+              }
+            >
+              {shown.notes ? <p className="whitespace-pre-wrap">{item.notes}</p> : <span className="secret text-slate-400">••••••••••••</span>}
+            </Row>
+          ) : (
+            <Row label="Notes">
+              <p className="whitespace-pre-wrap">{item.notes}</p>
+            </Row>
+          ))}
         {!item.username && !item.password && !item.notes && !item.urls.length && !item.card && !item.passkey && !item.custom.length && (
           <p className="py-6 text-center text-sm text-slate-500">No details yet.</p>
         )}
@@ -275,7 +318,7 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
                   <span className="shrink-0 text-xs text-slate-500">
                     {formatDate(h.setMs)} · {h.device}
                   </span>
-                  <IconButton label="Show" onClick={() => toggle(`h-${i}`)}>
+                  <IconButton label={shown[`h-${i}`] ? "Hide" : "Show"} onClick={() => toggle(`h-${i}`)}>
                     {shown[`h-${i}`] ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </IconButton>
                 </li>
@@ -289,15 +332,15 @@ export function ItemDetail({ id, onEdit, onBack, onGone }: { id: string; onEdit:
         {item.trashed ? (
           <>
             <Badge tone="rose">In trash</Badge>
-            <Button onClick={() => api.restoreItem(item.id).then(() => (toast("Restored"), load()))}>
+            <Button onClick={restore} busy={acting}>
               <RotateCcw className="size-4" /> Restore
             </Button>
-            <Button variant="danger" onClick={purge}>
+            <Button variant="danger" onClick={purge} busy={acting}>
               <Trash2 className="size-4" /> Delete forever
             </Button>
           </>
         ) : (
-          <Button variant="ghost" onClick={trash} className="text-rose-600 dark:text-rose-400">
+          <Button variant="ghost" onClick={trash} busy={acting} className="text-rose-600 dark:text-rose-400">
             <Trash2 className="size-4" /> Move to trash
           </Button>
         )}

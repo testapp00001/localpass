@@ -1,6 +1,6 @@
-// What LocalPass shows about a request, shared by the in-page dialogs (Chrome) and the decision
-// window (Firefox). The first line names the relying party id or site the extension checked, never
-// the name a page gave itself; page text is cleaned, shortened and only ever shown as text.
+// What LocalPass shows about a request in its decision panel (or window), in every browser. The first
+// line names the relying party id or site the extension checked, never the name a page gave itself;
+// page text is cleaned, shortened and only ever shown as text.
 
 import { displayText } from "./limits";
 import type { PasskeyCreateInput } from "./messages";
@@ -30,7 +30,17 @@ export function describePasskey(c: PasskeyCandidate): { label: string; sub: stri
   };
 }
 
-/** What the save bar says once the app has answered. */
+/**
+ * How a captured sign-in is offered: a new login, or a new password for a login that is saved
+ * already (the app said so; it still asks "Replace?" itself before it changes anything).
+ */
+export function saveOffer(update: boolean): { question: string; button: string; failed: string } {
+  return update
+    ? { question: "Update the saved password in LocalPass?", button: "Update", failed: "Could not update the password." }
+    : { question: "Save this login to LocalPass?", button: "Save", failed: "Could not save the login." };
+}
+
+/** What the save offer says once the app has answered. */
 export function saveMessage(outcome: SaveOutcome): string {
   if (outcome.status === "declined") return "You chose not to replace the saved password. Nothing was changed.";
   return outcome.status === "created" ? "Saved to LocalPass." : outcome.status === "updated" ? "Password updated in LocalPass." : "Already saved.";

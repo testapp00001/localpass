@@ -129,9 +129,15 @@ export function Vault({ section, folders, title }: { section: Section; folders: 
       .catch((e) => toast(errorText(e), "error"));
 
   const emptyTrash = async () => {
-    if (await ask("Delete everything in the trash permanently, on all your devices?", { title: "Empty trash", kind: "warning" })) {
+    if (!(await ask("Delete everything in the trash permanently, on all your devices?", { title: "Empty trash", kind: "warning" }))) return;
+    setWorking(true);
+    try {
       const n = await api.emptyTrash();
       toast(`Deleted ${n} item${n === 1 ? "" : "s"}`);
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setWorking(false);
       reload();
     }
   };
@@ -151,7 +157,7 @@ export function Vault({ section, folders, title }: { section: Section; folders: 
             {section.kind === "trash" ? (
               items.length > 0 &&
               !selecting && (
-                <Button variant="ghost" onClick={emptyTrash} className="text-rose-600">
+                <Button variant="ghost" busy={working} onClick={emptyTrash} className="text-rose-600">
                   <Trash2 className="size-4" /> Empty
                 </Button>
               )
@@ -170,6 +176,7 @@ export function Vault({ section, folders, title }: { section: Section; folders: 
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search"
+              aria-label="Search"
               className="w-full rounded-lg border-0 bg-slate-100 py-2 pr-3 pl-9 text-sm placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:bg-slate-900 dark:focus:bg-slate-900"
             />
           </div>

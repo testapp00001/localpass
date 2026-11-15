@@ -16,7 +16,7 @@ history: everything needed is here, in `CLAUDE.md`, and in the two notes files b
 
 ## RESUME HERE (state saved 2026-10-23, after 5.5; read this, then only the notes for your task)
 
-**Working plan (cheap):** the user's usage quota ran out once (a 375k-token chat plus many big agents). One task per fresh chat; small edits inline; at most one agent at a time and only for heavy work; no re-running whole e2e suites or cold builds unless the task needs it. 5.4 was started on the user's word "start 5.4" in a fresh chat and kept to this (docs only, no agents, no builds). 5.5 kept to it too (inline, no agents, builds and the emulator in the background; the cold release builds took 14 and 9 minutes). **5.6 is mostly assisted** (the user's own PC, phone, Windows Hello and real sites): list what only they can do and keep any automated part small.
+**Working plan (cheap):** the user's usage quota ran out once (a 375k-token chat plus many big agents). One task per fresh chat; small edits inline; agents only for an independent look (see CLAUDE.md, "Working with agents"); no re-running whole e2e suites or cold builds unless the task needs it. 5.4 was started on the user's word "start 5.4" in a fresh chat and kept to this (docs only, no agents, no builds). 5.5 kept to it too (inline, no agents, builds and the emulator in the background; the cold release builds took 14 and 9 minutes). **5.6 is mostly assisted** (the user's own PC, phone, Windows Hello and real sites): list what only they can do and keep any automated part small.
 
 Done: Phases 0-4; Phase 5 task 5.2 (all fixes, parts A Rust / B extension / C Android; notes sections 5.5, 5.5b, 5.5c in `docs/phase5-hardening-notes.md`).
 
@@ -65,10 +65,9 @@ Research notes written ahead of time (read the one for your task, not both):
 1. **One task at a time.** Do a task, verify it, update the status boxes below and the memory file
    (`project-localpass-extension-passkeys.md`), then stop or move on. Never leave the only copy of
    important state in the conversation.
-2. **Delegate with the Agent tool (general-purpose)** for: reading large headers or docs, a spike
-   with lots of trial and error, a test-debug loop, a security review, drafting docs. Give each agent
-   a self-contained prompt: goal, files to read, constraints, the file it must write, and "reply in
-   under 200 words". Read the agent's output file section you need, never its transcript.
+2. **Agents: only for an independent look** (a security audit, a review of a finished task, a second opinion), never for
+   the main session's own reading, coding or test-debug loops. The rule is in `CLAUDE.md`, "Working with agents" (it replaces
+   the earlier "delegate heavy work" rule that stood here). Read only the part of an agent's output file you need, never its transcript.
 3. **Keep output small.** Pipe long output through `tail -n 30` or `grep`. Run builds and e2e in the
    background and wait for the notification. Do not poll with sleep. Avoid screenshots (images are
    expensive); read the screen with uiautomator text (`extension/e2e/adb.ts`).
@@ -278,7 +277,9 @@ The main app stays an NSIS install; only the provider is an MSIX package.
   would show a QR image to the camera. Lesson: a WebView's accessibility tree (uiautomator) does not follow a scroll (cut-off nodes keep a zero-height box),
   so release-build e2e steps must not depend on scrolling; submit forms with Enter.
 
-## Prompt template for agents
+## Prompt template for an independent review
+
+For the independent looks that `CLAUDE.md` allows. Give the goal, the files or the diff and the questions; leave out the main session's conclusions.
 
 > Goal: ... Context: LocalPass, Rust workspace at C:\app\projects\rust\local-pass; read CLAUDE.md
 > and `docs/handoff-phase4-5.md` (rules) first. Read only: <files>. Do: <numbered steps>.

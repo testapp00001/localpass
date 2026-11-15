@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use lp_core::passgen::PasswordOptions;
 use lp_engine::{
-    DeviceInfo, Engine, FolderView, ImportReport, InviteInfo, ItemInput, ItemQuery, ItemSummary,
-    ItemView, SyncStatus, TotpCode, VaultStatus,
+    DeviceInfo, DuplicateGroup, Engine, FolderView, ImportReport, InviteInfo, ItemInput, ItemQuery,
+    ItemSummary, ItemView, SyncStatus, TotpCode, VaultStatus,
 };
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -390,6 +390,19 @@ pub fn list_items(state: State<'_, AppState>, query: ItemQuery) -> CmdResult<Vec
     state.engine.list_items(&query).map_err(err)
 }
 
+/// Logins saved twice (same username and password, same website). Carries no secret.
+#[tauri::command]
+pub fn find_duplicates(
+    state: State<'_, AppState>,
+    include_subdomains: bool,
+) -> CmdResult<Vec<DuplicateGroup>> {
+    state.touch();
+    state
+        .engine
+        .find_duplicate_logins(include_subdomains)
+        .map_err(err)
+}
+
 #[tauri::command]
 pub fn get_item(state: State<'_, AppState>, id: String) -> CmdResult<ItemView> {
     state.touch();
@@ -468,6 +481,83 @@ pub fn copy_text(app: AppHandle, state: State<'_, AppState>, text: String) -> Cm
 #[tauri::command]
 pub fn totp_code(state: State<'_, AppState>, id: String) -> CmdResult<TotpCode> {
     state.engine.totp_code(&id).map_err(err)
+}
+
+// ---- 2FA setup QR codes from a picture (desktop; a phone scans with its camera) ----
+
+/// What a QR scan hands back: the link for the 2FA field and whether the copied picture was
+/// cleared from the clipboard.
+#[cfg(desktop)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TotpQr {
+    #[serde(flatten)]
+    found: crate::qr::Found,
+    clipboard_cleared: bool,
+}
+
+#[cfg(desktop)]
+impl From<crate::qr::Found> for TotpQr {
+    fn from(found: crate::qr::Found) -> Self {
+        Self {
+            found,
+            clipboard_cleared: false,
+        }
+    }
+}
+
+/// "Paste QR image": reads the picture on the system clipboard (no file, and the pixels never
+/// reach the web view), finds the 2FA code in it and then empties the clipboard.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn totp_qr_from_clipboard(state: State<'_, AppState>) -> CmdResult<TotpQr> {
+    state.touch();
+    blocking(|| {
+        let image = clipboard::read_image()?;
+        let found = crate::qr::from_rgba(image.width, image.height, &image.rgba).map_err(err)?;
+        Ok(TotpQr {
+            found,
+            clipboard_cleared: clipboard::clear_if_image(&image),
+        })
+    })
+    .await
+}
+
+/// A picture file chosen in the open dialog or dropped on the window.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn totp_qr_from_file(state: State<'_, AppState>, path: String) -> CmdResult<TotpQr> {
+    state.touch();
+    blocking(move || {
+        crate::qr::from_file(std::path::Path::new(&path))
+            .map(TotpQr::from)
+            .map_err(err)
+    })
+    .await
+}
+
+/// "Scan QR on screen": LocalPass steps aside, the screen is captured (Windows: all monitors;
+/// Linux: the desktop's screenshot picker) and the window comes back. `None` when the user closed
+/// the picker.
+#[cfg(desktop)]
+#[tauri::command]
+pub async fn totp_qr_from_screen(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<TotpQr>> {
+    state.touch();
+    // If the window cannot step aside, the capture still works; the window may just be in it.
+    let _ = window.minimize();
+    // Let the window finish disappearing; otherwise it can be in the picture.
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    #[cfg(target_os = "linux")]
+    let found = crate::qr::from_screen().await.map_err(err);
+    #[cfg(not(target_os = "linux"))]
+    let found = blocking(|| crate::qr::from_screen().map_err(err)).await;
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    state.touch();
+    Ok(found?.map(TotpQr::from))
 }
 
 #[derive(Serialize)]
@@ -665,6 +755,36 @@ fn extension_folder(app: &AppHandle) -> Option<std::path::PathBuf> {
         .find(|dir| has_manifest(dir))
 }
 
+/// Where a release RPM puts the Firefox add-on signed by Mozilla, inside the app's resources
+/// (`/usr/lib/localpass/firefox/...`). Beside the Chrome folder `extension/`, not in it, so that
+/// "Load unpacked" does not take the `.xpi` into the Chrome extension. Only CI adds it (`release.yml`,
+/// job `linux`, when the `firefox` job signed one); local builds have none.
+const FIREFOX_ADDON: &str = "firefox/localpass-firefox.xpi";
+
+/// The signed Firefox add-on in `resources`, when this build ships one.
+fn firefox_addon_in(resources: &std::path::Path) -> Option<std::path::PathBuf> {
+    let file = resources.join(FIREFOX_ADDON);
+    file.is_file().then_some(file)
+}
+
+/// The signed Firefox add-on that came with the installed app (a release RPM), if any.
+fn firefox_addon(app: &AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    firefox_addon_in(&app.path().resource_dir().ok()?)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+// Android has no browser connection: there the list stays empty.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+pub struct BrowserInfo {
+    name: &'static str,
+    /// The browser is there for this user (Linux: it has been run; Windows: always true).
+    present: bool,
+    /// The browser finds the helper, and the registration points at this copy of the app.
+    registered: bool,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserStatus {
@@ -674,11 +794,15 @@ pub struct BrowserStatus {
     os: &'static str,
     extension_id: &'static str,
     extension_folder: Option<String>,
-    /// Chrome and Edge find the helper (the registration points at this copy of the app).
-    chrome: bool,
-    edge: bool,
-    /// Firefox finds the helper (Linux).
-    firefox: bool,
+    /// The signed Firefox add-on (`.xpi`) shipped with the app: a release RPM built with the
+    /// signing secrets. `None` in other builds; Settings then points at the release page.
+    firefox_addon: Option<String>,
+    /// The browsers we register with (Windows: Chrome and Edge; Linux: Firefox and the Chromium
+    /// browsers).
+    browsers: Vec<BrowserInfo>,
+    /// Linux: the program of another copy of LocalPass, when some browser's manifest names it
+    /// instead of this copy.
+    other_copy: Option<String>,
     clients: Vec<crate::broker::ClientInfo>,
 }
 
@@ -700,45 +824,52 @@ fn browser_status_of(app: &AppHandle, state: &AppState) -> BrowserStatus {
         })
         .unwrap_or_default();
     #[cfg(windows)]
-    let (available, os, chrome, edge, firefox) = {
+    let (available, os, browsers, other_copy) = {
         let exe = std::env::current_exe().unwrap_or_default();
-        let registered = |name: &str| {
-            crate::native_messaging::BROWSERS
-                .iter()
-                .find(|(n, _)| *n == name)
-                .is_some_and(|(_, key)| {
-                    crate::native_messaging::is_registered(key, &state.data_dir, &exe)
-                })
-        };
-        (
-            true,
-            "windows",
-            registered("Chrome"),
-            registered("Edge"),
-            false,
-        )
+        let browsers: Vec<BrowserInfo> = crate::native_messaging::BROWSERS
+            .iter()
+            .map(|&(name, key)| BrowserInfo {
+                name,
+                present: true,
+                registered: crate::native_messaging::is_registered(key, &state.data_dir, &exe),
+            })
+            .collect();
+        (true, "windows", browsers, None)
     };
     #[cfg(target_os = "linux")]
-    let (available, os, chrome, edge, firefox) = {
+    let (available, os, browsers, other_copy) = {
         let _ = state;
         let exe = std::env::current_exe().unwrap_or_default();
-        let firefox = crate::native_messaging::home_dir()
-            .is_ok_and(|home| crate::native_messaging::is_registered(&home, &exe));
-        (true, "linux", false, false, firefox)
+        let seen = crate::native_messaging::Places::from_env()
+            .map(|places| crate::native_messaging::status(&places, &exe))
+            .unwrap_or_default();
+        let other_copy = seen
+            .iter()
+            .find_map(|b| b.other_copy.as_ref())
+            .map(|p| p.display().to_string());
+        let browsers: Vec<BrowserInfo> = seen
+            .into_iter()
+            .map(|b| BrowserInfo {
+                name: b.name,
+                present: b.present,
+                registered: b.registered,
+            })
+            .collect();
+        (true, "linux", browsers, other_copy)
     };
     #[cfg(not(any(windows, target_os = "linux")))]
-    let (available, os, chrome, edge, firefox) = {
+    let (available, os, browsers, other_copy) = {
         let _ = state;
-        (false, "", false, false, false)
+        (false, "", Vec::new(), None)
     };
     BrowserStatus {
         available,
         os,
         extension_id: lp_broker::nmhost::EXTENSION_ID,
         extension_folder: extension_folder(app).map(|p| p.display().to_string()),
-        chrome,
-        edge,
-        firefox,
+        firefox_addon: firefox_addon(app).map(|p| p.display().to_string()),
+        browsers,
+        other_copy,
         clients,
     }
 }
@@ -748,8 +879,8 @@ pub fn browser_status(app: AppHandle, state: State<'_, AppState>) -> BrowserStat
     browser_status_of(&app, &state)
 }
 
-/// Lets the browsers start LocalPass as the extension's helper (Chrome and Edge on Windows,
-/// Firefox on Linux).
+/// Lets the browsers start LocalPass as the extension's helper (Chrome and Edge on Windows;
+/// Firefox and the Chromium browsers that have been run on Linux). Also "Use this copy".
 #[tauri::command]
 pub fn browser_install(app: AppHandle, state: State<'_, AppState>) -> CmdResult<BrowserStatus> {
     #[cfg(windows)]
@@ -761,8 +892,8 @@ pub fn browser_install(app: AppHandle, state: State<'_, AppState>) -> CmdResult<
     #[cfg(target_os = "linux")]
     {
         let exe = std::env::current_exe().map_err(err)?;
-        let home = crate::native_messaging::home_dir().map_err(err)?;
-        crate::native_messaging::install(&home, &exe).map_err(err)?;
+        let places = crate::native_messaging::Places::from_env().map_err(err)?;
+        crate::native_messaging::install(&places, &exe).map_err(err)?;
         Ok(browser_status_of(&app, &state))
     }
     #[cfg(not(any(windows, target_os = "linux")))]
@@ -777,7 +908,7 @@ pub fn browser_remove(app: AppHandle, state: State<'_, AppState>) -> CmdResult<B
     #[cfg(windows)]
     crate::native_messaging::remove(&state.data_dir).map_err(err)?;
     #[cfg(target_os = "linux")]
-    crate::native_messaging::remove(&crate::native_messaging::home_dir().map_err(err)?)
+    crate::native_messaging::remove(&crate::native_messaging::Places::from_env().map_err(err)?)
         .map_err(err)?;
     Ok(browser_status_of(&app, &state))
 }
@@ -793,13 +924,27 @@ pub fn browser_client_remove(app: AppHandle, id: String) -> CmdResult<()> {
     broker.forget_client(&id).map_err(err)
 }
 
-/// The user's answer to "a browser wants to connect" and to "replace what is saved?".
+/// The user's answer to "a browser wants to connect" and to "replace what is saved?". False when
+/// the answer reached no one: the request had already ended (timed out, cancelled, connection
+/// dropped), or an approval for a check that needs the master password (Linux).
 #[tauri::command]
-pub fn broker_respond(app: AppHandle, request_id: u64, approve: bool) {
+pub fn broker_respond(app: AppHandle, request_id: u64, approve: bool) -> bool {
     use tauri::Manager;
-    if let Some(broker) = app.try_state::<crate::broker::BrokerState>() {
-        broker.host.respond(request_id, approve);
-    }
+    app.try_state::<crate::broker::BrokerState>()
+        .is_some_and(|broker| broker.host.respond(request_id, approve))
+}
+
+/// Which browser is waiting for an unlock (the unlock screen asks when it appears; changes
+/// arrive as `unlockWaiting` events).
+#[tauri::command]
+pub fn broker_unlock_waiting(app: AppHandle) -> crate::broker::WaitingView {
+    use tauri::Manager;
+    app.try_state::<crate::broker::BrokerState>()
+        .map(|broker| broker.host.unlock_waiting())
+        .unwrap_or(crate::broker::WaitingView {
+            version: 0,
+            name: None,
+        })
 }
 
 /// A master password typed into the dialog of a browser's "is it you?" check (Linux). A wrong
@@ -830,6 +975,16 @@ pub fn open_extension_folder(app: AppHandle) -> CmdResult<()> {
     app.opener()
         .open_path(folder.to_string_lossy(), None::<&str>)
         .map_err(err)
+}
+
+/// Shows the signed Firefox add-on in the file manager (the file selected), for Firefox's
+/// "Install Add-on From File".
+#[tauri::command]
+pub fn open_firefox_addon(app: AppHandle) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let file =
+        firefox_addon(&app).ok_or("this copy of LocalPass came without the Firefox add-on")?;
+    app.opener().reveal_item_in_dir(file).map_err(err)
 }
 
 // ---- Windows passkey provider (Settings > Windows passkeys) ----
@@ -984,7 +1139,30 @@ pub async fn android_open_setup(app: AppHandle, target: String) -> CmdResult<()>
 
 #[cfg(test)]
 mod tests {
-    use super::pretty_name;
+    use super::{firefox_addon_in, pretty_name};
+
+    #[test]
+    fn the_firefox_addon_is_found_only_where_the_rpm_puts_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let resources = dir.path();
+        // A build without the signed add-on (local builds, a release without the signing secrets).
+        assert_eq!(firefox_addon_in(resources), None);
+        // Not inside the Chrome folder, and not under another name.
+        std::fs::create_dir_all(resources.join("extension")).unwrap();
+        std::fs::write(resources.join("extension/localpass-firefox.xpi"), b"x").unwrap();
+        std::fs::create_dir_all(resources.join("firefox")).unwrap();
+        std::fs::write(resources.join("firefox/localpass-firefox-0.3.0.xpi"), b"x").unwrap();
+        assert_eq!(firefox_addon_in(resources), None);
+        // A folder of that name is not the add-on.
+        std::fs::create_dir(resources.join("firefox/localpass-firefox.xpi")).unwrap();
+        assert_eq!(firefox_addon_in(resources), None);
+        std::fs::remove_dir(resources.join("firefox/localpass-firefox.xpi")).unwrap();
+        std::fs::write(resources.join("firefox/localpass-firefox.xpi"), b"x").unwrap();
+        assert_eq!(
+            firefox_addon_in(resources),
+            Some(resources.join("firefox").join("localpass-firefox.xpi"))
+        );
+    }
 
     #[test]
     fn device_name_suggestions_come_from_the_first_label() {

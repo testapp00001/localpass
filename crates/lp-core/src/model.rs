@@ -52,7 +52,7 @@ pub mod keys {
     pub fn is_secret(key: &str) -> bool {
         matches!(
             key,
-            PASSWORD | TOTP | CARD_NUMBER | CARD_CVV | PASSKEY_PRIVATE_KEY
+            PASSWORD | TOTP | CARD_NUMBER | CARD_CVV | PASSKEY_PRIVATE_KEY | "file.key"
         )
     }
 }

@@ -64,3 +64,22 @@ export function honestApp(options: AppOptions = {}) {
     };
   };
 }
+
+export interface SavedLogin {
+  origin: string;
+  username: string;
+  password: string;
+}
+
+/**
+ * The app's answer to `checkLogin` for a vault holding `saved`, compared the way
+ * `Engine::plan_save_login` compares (user names trimmed, ASCII letters in any case; the site here
+ * is the exact origin, which is enough for these tests).
+ */
+export function checkLoginAnswer(saved: SavedLogin[]) {
+  const norm = (u: string) => u.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
+  return (request: Json) => {
+    const same = saved.find((s) => s.origin === request.origin && norm(s.username) === norm(String(request.username)));
+    return { status: !same ? "new" : same.password === request.password ? "unchanged" : "update" };
+  };
+}

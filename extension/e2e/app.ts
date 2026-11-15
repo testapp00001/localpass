@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import { Panels, panelClick, panelShows, panelText } from "./harness";
 import { startRelyingParty } from "./rp";
 
 const root = resolve(import.meta.dir, "../..");
@@ -147,10 +148,12 @@ try {
     args: ["--no-first-run", "--no-default-browser-check"],
     env: { ...process.env, LOCALPASS_PROFILE: profile } as Record<string, string>,
   });
+  // Every pick and passkey confirmation is made in LocalPass's toolbar panel (8.3b), which puppeteer reaches as a page.
+  const panels = new Panels(chrome);
   const popup = await chrome.newPage();
   await popup.goto(`chrome-extension://${EXTENSION_ID}/popup.html`);
   await popup.waitForFunction(() => document.body.innerText.includes("Connect to LocalPass"), { timeout: 30000 });
-  await popup.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent === "Connect")!.click());
+  await panelClick(popup, "Connect"); // the popup in a tab is held for 0.6 s (8.3c)
   await popup.waitForFunction(() => /\d{6}/.test(document.querySelector(".code")?.textContent ?? ""), { timeout: 15000 });
   const shown = await popup.$eval(".code", (el) => el.textContent ?? "");
   await waitForText(ui, "Connect a browser?");
@@ -168,9 +171,9 @@ try {
   await page.bringToFront();
   await page.focus('input[name="username"]');
   const badge = await page.waitForSelector("pierce/.badge[data-ready]", { timeout: 10000 });
+  const picker = panels.next();
   await badge!.click();
-  const row = await page.waitForSelector("pierce/.row[data-ready]", { timeout: 8000 });
-  await row!.click();
+  await panelClick(await picker, "Local site");
   await sleep(600);
   const filled = await page.evaluate(() => [(document.querySelector('input[name="username"]') as HTMLInputElement).value, (document.querySelector('input[name="password"]') as HTMLInputElement).value]);
   check("the login is filled from the real app", filled[0] === "alice" && filled[1] === "alice-secret", JSON.stringify(filled));
@@ -192,18 +195,21 @@ try {
   const rpPage = await chrome.newPage();
   await rpPage.goto(`${rp.origin}/`);
   await rpPage.bringToFront();
+  const createPanel = panels.next();
   await rpPage.click("#register");
-  await (await rpPage.waitForSelector("pierce/.btn.primary[data-ready]", { timeout: 10000 }))!.click();
+  const creating = await createPanel;
+  await panelClick(creating, "Create passkey");
   const registered_ = await rpStatus(rpPage, "registered");
-  const sheetNow = await rpPage.$eval("pierce/.sheet", (el) => el.textContent ?? "").catch(() => "(no dialog)");
+  const sheetNow = await panelText(creating).catch(() => "(the panel closed)");
   check("a passkey is created through the real app and the site accepts it", registered_ === "registered", registered_ === "registered" ? "" : `${registered_}; dialog: ${sheetNow.slice(0, 200)}`);
   const vaultItems = (await invoke("list_items", { query: {} })) as { kind: string; title: string }[];
   check("the passkey is in the app's vault", vaultItems.some((i) => i.kind === "passkey"), JSON.stringify(vaultItems.map((i) => i.kind)));
   const signIn = await chrome.newPage();
   await signIn.goto(`${rp.origin}/`);
   await signIn.bringToFront();
+  const signInPanel = panels.next();
   await signIn.click("#signin");
-  await (await signIn.waitForSelector("pierce/.row[data-ready]", { timeout: 10000 }))!.click();
+  await panelClick(await signInPanel, "alice", 10000);
   check("signing in with it through the real app works", (await rpStatus(signIn, "signed-in")) === "signed-in");
 
   // Locking the app makes the extension ask for an unlock; unlocking in the app lets it continue.
@@ -212,9 +218,10 @@ try {
   await page.bringToFront(); // focus events only fire in the tab in front
   await sleep(500);
   await page.focus('input[name="username"]');
+  const lockedPanel = panels.next();
   await (await page.waitForSelector("pierce/.badge[data-ready]", { timeout: 8000 }))!.click();
-  const lockedMenu = await (await page.waitForSelector("pierce/.panel", { timeout: 8000 }))!.evaluate((el) => el.textContent ?? "");
-  check("a locked app is reported to the page", lockedMenu.includes("locked"), lockedMenu);
+  const lockedMenu = await panelShows(await lockedPanel, /locked/);
+  check("a locked app is reported in the panel", lockedMenu.includes("locked"), lockedMenu);
 
   // Disconnecting in Settings locks the browser out.
   await invoke("unlock", { password: "end to end master password" });

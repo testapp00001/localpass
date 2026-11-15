@@ -11,6 +11,7 @@ export interface Settings {
   startAtLogin: boolean;
   theme: "system" | "light" | "dark";
   passkeyVerifyEveryTime: boolean;
+  duplicatesIncludeSubdomains: boolean;
 }
 
 export interface AppInfo {
@@ -54,6 +55,22 @@ export interface ItemSummary {
   trashed: boolean;
   updatedMs: number;
   conflicted: boolean;
+}
+
+/** One saved copy in a group of duplicate logins (no secrets: only whether notes, 2FA and fields exist). */
+export interface DuplicateItem extends ItemSummary {
+  urls: string[];
+  hasNotes: boolean;
+  customFields: number;
+  updatedBy: string;
+}
+
+export interface DuplicateGroup {
+  /** The websites that two or more copies share. */
+  sites: string[];
+  username: string;
+  /** Two or more copies, the most recently changed first. */
+  items: DuplicateItem[];
 }
 
 export interface CardFields {
@@ -123,6 +140,14 @@ export interface ItemView extends Omit<ItemInput, "id"> {
   updatedBy: string;
   passwordHistory: HistoryEntry[];
   conflicts: ConflictView[];
+}
+
+/** A 2FA setup QR code found in a picture. `clipboardCleared`: the copied picture was removed from the clipboard. */
+export interface TotpQr {
+  uri: string;
+  issuer: string | null;
+  account: string | null;
+  clipboardCleared: boolean;
 }
 
 export interface TotpCode {
@@ -217,15 +242,26 @@ export interface BrowserClient {
   lastUsedMs: number;
 }
 
+export interface BrowserInfo {
+  name: string;
+  /** The browser is there for this user (Linux: it has been run; Windows: always true). */
+  present: boolean;
+  /** The browser finds LocalPass, and the registration points at this copy of the app. */
+  registered: boolean;
+}
+
 export interface BrowserStatus {
   available: boolean;
   /** "windows" or "linux". */
   os: string;
   extensionId: string;
   extensionFolder: string | null;
-  chrome: boolean;
-  edge: boolean;
-  firefox: boolean;
+  /** The signed Firefox add-on (.xpi) that came with this copy (a release RPM); null otherwise. */
+  firefoxAddon: string | null;
+  /** Windows: Chrome and Edge. Linux: Firefox and the Chromium browsers. */
+  browsers: BrowserInfo[];
+  /** Linux: the program of another copy of LocalPass that a browser's registration names. */
+  otherCopy: string | null;
   clients: BrowserClient[];
 }
 
@@ -263,7 +299,14 @@ export type UiEvent =
   | { type: "confirmOverwriteCancelled"; requestId: number }
   | { type: "verifyUser"; requestId: number; reason: string }
   | { type: "verifyUserCancelled"; requestId: number }
-  | { type: "windowShown" };
+  | { type: "windowShown" }
+  | ({ type: "unlockWaiting" } & UnlockWaiting);
+
+/** Which browser (broker client) waits for an unlock; `version` grows with every change. */
+export interface UnlockWaiting {
+  version: number;
+  name: string | null;
+}
 
 /** One part of the phone's set-up: "unknown" means Android does not let an app read it. */
 export type SetupState = "unsupported" | "on" | "off" | "unknown";
@@ -305,6 +348,7 @@ export const api = {
   changePassword: (old: string, next: string) => invoke<void>("change_password", { old, new: next }),
 
   listItems: (query: ItemQuery) => invoke<ItemSummary[]>("list_items", { query }),
+  findDuplicates: (includeSubdomains: boolean) => invoke<DuplicateGroup[]>("find_duplicates", { includeSubdomains }),
   getItem: (id: string) => invoke<ItemView>("get_item", { id }),
   saveItem: (input: ItemInput) => invoke<string>("save_item", { input }),
   trashItem: (id: string) => invoke<void>("trash_item", { id }),
@@ -316,6 +360,10 @@ export const api = {
   copyField: (id: string, field: string) => invoke<number>("copy_field", { id, field }),
   copyText: (text: string) => invoke<number>("copy_text", { text }),
   totpCode: (id: string) => invoke<TotpCode>("totp_code", { id }),
+  // Desktop only: a 2FA setup QR code read from a copied picture, a picture file or the screen.
+  totpQrFromClipboard: () => invoke<TotpQr>("totp_qr_from_clipboard"),
+  totpQrFromFile: (path: string) => invoke<TotpQr>("totp_qr_from_file", { path }),
+  totpQrFromScreen: () => invoke<TotpQr | null>("totp_qr_from_screen"),
   generatePassword: (options: PasswordOptions) =>
     invoke<{ password: string; entropyBits: number }>("generate_password", { options }),
 
@@ -346,11 +394,15 @@ export const api = {
   browserInstall: () => invoke<BrowserStatus>("browser_install"),
   browserRemove: () => invoke<BrowserStatus>("browser_remove"),
   browserClientRemove: (id: string) => invoke<void>("browser_client_remove", { id }),
-  brokerRespond: (requestId: number, approve: boolean) => invoke<void>("broker_respond", { requestId, approve }),
+  /** False when the request had already ended, so the answer reached no one. */
+  brokerRespond: (requestId: number, approve: boolean) => invoke<boolean>("broker_respond", { requestId, approve }),
+  brokerUnlockWaiting: () => invoke<UnlockWaiting>("broker_unlock_waiting"),
   /** Linux: the master password for a browser's "is it you?" check. */
   brokerVerify: (requestId: number, password: string) =>
     invoke<"accepted" | "wrong" | "refused">("broker_verify", { requestId, password }),
   openExtensionFolder: () => invoke<void>("open_extension_folder"),
+  /** Shows the shipped Firefox add-on in the file manager. */
+  openFirefoxAddon: () => invoke<void>("open_firefox_addon"),
   windowsPasskeysStatus: () => invoke<WindowsPasskeysStatus>("windows_passkeys_status"),
   windowsPasskeysSetup: () => invoke<WindowsPasskeysStatus>("windows_passkeys_setup"),
   windowsPasskeysPair: () => invoke<WindowsPasskeysStatus>("windows_passkeys_pair"),
