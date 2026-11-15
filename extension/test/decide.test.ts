@@ -19,6 +19,13 @@ const CREATE: DecisionRequest = {
 };
 const GET: DecisionRequest = { decision: "passkeyGet", rpId: "example.com", allow: [], challenge: "AAAA", uv: "preferred" };
 
+// Await timer-driven outcomes normally before matching them. A resolved value and
+// a rejection stay distinct, without an async matcher waiting on the timer.
+const settled = (outcome: Promise<unknown>) => outcome.then(
+  (value) => ({ value }),
+  (error: unknown) => ({ error }),
+);
+
 let windows: ReturnType<typeof installWindows>;
 let calls: { op: string; params: Record<string, unknown> }[];
 let calledDeps: string[];
@@ -800,15 +807,15 @@ describe("Firefox toolbar picker", () => {
       await sleep(120);
       expect(p.state.done).toBe(false);
       port.serverClose();
-      await expect(p.outcome).rejects.toMatchObject({ code: "cancelled", message: "The request timed out." });
+      expect(await settled(p.outcome)).toMatchObject({ error: { code: "cancelled", message: "The request timed out." } });
       await normal();
       // Not shown at all: it ends at its time.
       const q = await shown(CREATE, "r2");
-      await expect(q.outcome).rejects.toMatchObject({ code: "cancelled" });
+      expect(await settled(q.outcome)).toMatchObject({ error: { code: "cancelled" } });
       await normal();
       pending = { ...pending!, expiresAt: Date.now() + 60 };
       const s = await shown(SAVE, "r3");
-      await expect(s.outcome).rejects.toMatchObject({ code: "cancelled" });
+      expect(await settled(s.outcome)).toMatchObject({ error: { code: "cancelled" } });
       expect(dismissed()).toContain("dismiss:7:p1:false");
       await normal();
     });
@@ -942,7 +949,7 @@ describe("Firefox toolbar picker", () => {
         port.serverClose();
         change();
         release();
-        await expect(p.outcome, why).rejects.toMatchObject({ code: "cancelled" });
+        expect(await settled(p.outcome), why).toMatchObject({ error: { code: "cancelled" } });
         expect(calledDeps, why).not.toContain("rememberFill:7");
         focused = true;
         tab.url = `${ORIGIN}/login`;

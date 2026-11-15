@@ -88,3 +88,4 @@ jobs:
         working-directory: app
       - run: bun install --frozen-lockfile && bunx tsc --noEmit && bun run test
         working-directory: extension
+        timeout-minutes: 5

@@ -6,7 +6,8 @@ state; do not rely on conversation history. All plans: `docs/plans/README.md`.
 ## RESUME HERE (state updated 2026-11-15)
 
 Phase 8 started on branch `phase7` at `c682e84`. Its implementation and this handoff are recorded together in the local Phase 8
-commit on `phase7`, requested by the user on 2026-11-15. Push, merge, tag and release were not requested.
+commit on `phase7`, requested by the user on 2026-11-15. The user then pushed it and requested merging into `main` (PR #1).
+Tag and release were not requested; the merge result and final CI status are recorded in PR #1.
 `.cargo/config.toml` is unchanged; never commit, edit or revert the owner's linker settings unasked. Phase 7's only open item is
 7.7 (release 0.3.0, only when the user asks; `docs/handoff-phase7.md`).
 
@@ -17,7 +18,7 @@ State on 2026-11-15 (earlier implementation and review details remain under "Sta
 - 8.1, 8.2, 8.3a, 8.3b, 8.3c: coded by agents and checked by the lead (code read, checks re-run; 8.3b and 8.3c also
   mutation-checked). The user accepted the local walkthrough on 2026-11-15; Windows checks remain open.
 - 8.4: done on Linux; its assisted check (the Unlock round trip from both browsers with the app in the tray) passed in Firefox and
-  Chrome on 2026-11-13. The Windows and Android builds of its changed `cfg` paths were not compiled here.
+  Chrome on 2026-11-13. Its Windows paths compiled in merge CI on 2026-11-15; Android compilation remains open.
 - 8.5 (the signed `.xpi` in the RPM): done in the tree and checked by the lead. Proven only by the first real release run; Open in
   the real app not tried.
 - 8.6: done, including the user's acceptance of the real-screen walkthrough on 2026-11-15:
@@ -32,7 +33,8 @@ State on 2026-11-15 (earlier implementation and review details remain under "Sta
 Next steps, in this order:
 1. **The user's decisions**, list (b) below, remain undecided; acceptance of the walkthrough did not approve these changes.
 2. Complete the Windows/Android and release verification in list (c) when the required machine or release is available.
-3. Push, merge and release only when the user asks. Phase 8 remains in progress for the external checks; 8.6 is closed.
+3. Complete the authorized PR #1 merge after CI passes. Tag and release only when the user asks. Phase 8 remains in progress for
+   the remaining external checks; 8.6 is closed.
 
 **Acceptance and checks (2026-11-15)**
 - The user explicitly confirmed Chrome pairing, saving a new login, filling it, and no duplicate offer after autofill or manual
@@ -41,8 +43,8 @@ Next steps, in this order:
 - Fresh automated checks: `cargo test --offline --locked --workspace --exclude lp-winauth --no-fail-fast`: 381 passed, 0 failed,
   2 ignored; extension `bun test`: 443 passed, 0 failed; app `bun test`: 21 passed, 9 skipped, 0 failed; both TypeScript checks and
   `cargo fmt --all -- --check` passed. Socket-dependent tests first failed under sandbox restrictions, then passed with socket access.
-- Browser e2e and clippy were not rerun in this session; their last recorded runs are below. Windows/Android compilation and release
-  packaging were not verified. Decisions in list (b) remain open.
+- Browser e2e and clippy were not rerun in the initial local acceptance checks; the later merge CI results are below. Android
+  compilation and release packaging remain unverified. Decisions in list (b) remain open.
 - During the requested merge to `main` (PR #1), the first Linux CI run passed Clippy but its three helper-process tests failed:
   Cargo 1.100 runs the test executable from a nested `build/<crate>/<hash>/out/` folder, so the old two-parent lookup missed the
   `nmhost` example. The test now searches ancestor folders for the built example, and both CI jobs build examples before tests.
@@ -53,6 +55,17 @@ Next steps, in this order:
   later files. Running those files in that order reproduced the same four failures locally. `extension/package.json` now runs
   `bun test --isolate`, and CI uses `bun run test`; all 443 extension tests passed with per-file isolation. No assertion was removed
   or weakened. Use `bun run test` for future full-suite checks.
+- The Windows web job remained stalled after per-file isolation. Timer-driven deadline assertions now await a tagged settlement
+  before applying the same synchronous checks, keeping successful values distinct from rejections and avoiding a pending async
+  matcher. All 103 decision tests and extension TypeScript checking passed locally. The extension CI step also has a five-minute
+  limit so any remaining runner stall yields a completed log instead of waiting indefinitely. The cancelled isolated Windows run
+  had no assertion failures and stopped at the deadline test, confirming that the earlier duplicate-listener failures were gone.
+  The updated assertions still need confirmation on Windows in PR #1.
+
+- Merge CI on `d2e8784`: Linux completed successfully, including Clippy, the workspace tests and Firefox e2e; Windows Clippy,
+  example builds and workspace tests passed. The final Windows provider cancellation test exposed the same two-parent helper lookup
+  in `lp-winauth/tests/pipe.rs`; it now finds `dev_host.exe` from either Cargo layout. The actual lookup function compiled and found
+  fixtures in legacy and nested paths on Linux; the Windows integration run remains CI's responsibility. No provider test was skipped.
 
 **For the user: one list**
 
@@ -97,8 +110,8 @@ Firefox, Load Temporary Add-on, `extension/dist-firefox/manifest.json`; Chrome: 
 (The line numbers are those of the walk-through, before the small fixes; look the code up again before acting.)
 
 (c) Needs another machine or a release:
-- Windows and Android builds of the changed `cfg` paths (8.4's `prompt_window.rs`/`broker.rs`) and of `commands.rs` (8.1, 8.5,
-  `broker_respond`): not compiled here.
+- Android builds of the changed `cfg` paths (8.4's `prompt_window.rs`/`broker.rs`) and of `commands.rs` (8.1, 8.5,
+  `broker_respond`): not compiled here. Windows compilation and workspace tests passed in merge CI on 2026-11-15.
 - Windows checks of the panel in Chrome and Edge (focus rule, shortcut assignment, `openPopup`-to-attach order, `e2e/app.ts`), on
   the Windows work laptop.
 - The first real release run for 8.5 (`download-artifact` in the Fedora container, the `--config` merge in CI, the signed and
