@@ -22,7 +22,12 @@ function sources(dir: string): string[] {
 
 describe("permissions", () => {
   test("exactly the permissions the code uses", () => {
-    expect([...(manifest.permissions as string[])].sort()).toEqual(["activeTab", "nativeMessaging", "privacy", "storage"]);
+    // `tabs`: the decisions read the address of their tab in Chrome (8.3b; it adds no install warning there).
+    expect([...(manifest.permissions as string[])].sort()).toEqual(["activeTab", "nativeMessaging", "privacy", "storage", "tabs"]);
+  });
+
+  test("Chrome 127 or newer: `action.openPopup` without a click, which every decision panel needs", () => {
+    expect(manifest.minimum_chrome_version).toBe("127");
   });
 
   test("scripting is not declared and nothing calls chrome.scripting", () => {
@@ -32,6 +37,15 @@ describe("permissions", () => {
 
   test("no host permissions, no externally_connectable, no web_accessible_resources", () => {
     for (const key of ["host_permissions", "optional_host_permissions", "externally_connectable", "web_accessible_resources"]) expect(manifest[key]).toBeUndefined();
+  });
+});
+
+describe("the shortcut (8.3c)", () => {
+  // The browser's own command: it opens the toolbar popup, which is the decision panel while a tab has one.
+  // Measured on Linux: Chrome 157 leaves Ctrl+Shift+L empty (a conflict) while both Chrome 157 and Firefox 160 assign
+  // Alt+Shift+L (user decision of 2026-11-13). LocalPass ships no macOS build, so there is no `mac` key.
+  test("Alt+Shift+L opens the toolbar popup, and nothing else is declared", () => {
+    expect(manifest.commands).toEqual({ _execute_action: { suggested_key: { default: "Alt+Shift+L" } } });
   });
 });
 
@@ -62,10 +76,16 @@ describe("the Firefox manifest", () => {
     for (const key of ["key", "minimum_chrome_version"]) expect(ff[key]).toBeUndefined();
   });
 
-  test("the same permissions, scripts and (absent) host permissions as the Chrome manifest", () => {
-    expect(ff.permissions).toEqual(manifest.permissions);
+  test("the same permissions (but `tabs`, which Firefox does not need), scripts and (absent) host permissions as the Chrome manifest", () => {
+    expect(ff.permissions).toEqual((manifest.permissions as string[]).filter((p) => p !== "tabs"));
+    expect(ff.permissions).not.toContain("tabs");
     expect(ff.content_scripts).toEqual(manifest.content_scripts);
     for (const key of ["host_permissions", "optional_host_permissions", "externally_connectable", "web_accessible_resources"]) expect(ff[key]).toBeUndefined();
+  });
+
+  test("it carries the same shortcut", () => {
+    expect(ff.commands).toEqual(manifest.commands);
+    expect(ff.commands._execute_action.suggested_key.default).toBe("Alt+Shift+L");
   });
 
   test("it says LocalPass collects no data", () => {

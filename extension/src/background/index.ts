@@ -4,28 +4,41 @@
 // * The site a request is for comes from the browser (`sender`), never from what a page's
 //   script says. Secrets are only given to the frame they belong to, or to the top frame of a
 //   tab the user picked in the popup.
+// * A content script runs next to an untrusted page, so nothing it can send by itself yields a
+//   password, a signature or a save. Those happen only as the outcome of a decision the user took in
+//   LocalPass's own panel or window (`decide`, see decide.ts), and the outcome is the reply to that
+//   content script's own `decide` message. What a content script may ask otherwise is listed in
+//   `handle`: the badge's status (no titles or user names), captures, the id of a capture to offer,
+//   and the passkey switch.
 // * Page-load queries never connect (so browsing never starts the app); user clicks do, and so do
 //   passkey requests (the worker sleeps when idle, and a request must not slip to the browser).
+// * A sign-in the user really sent may connect; a page load never does. A `capture` the content
+//   script marks `byUser` (a trusted click or Enter key, never a submit event, which a page script
+//   can fire as trusted) and that is kept as a pending save starts a connection when there is none
+//   (disconnected, or the app was not running): without pairing and without waiting for it, as at
+//   browser start. Unpaired, denied, untrusted or errored connections are left as they are. Asking
+//   whether a pending save is already in the vault (`pendingSave`, on page load) never starts a
+//   connection; it only waits up to 2 s for one that is already being made. Only a capture the user
+//   sent is checked with the app at all (`Pending.byUser`): the answer must not become a way for a page
+//   script to test guessed logins.
 
 import { sha256Hex } from "../shared/crypto";
 import { MAX_CAPTURE_CHARS } from "../shared/limits";
 import type {
   FindLoginsReply,
   PendingSave,
+  PendingSaveRef,
   PopupState,
   PrivacyState,
   Reply,
+  SiteStatus,
   ToBackground,
   ToContent,
 } from "../shared/messages";
 import { BrokerError, type ItemSummary, type LoginFill, type LoginMatch, type SaveOutcome, type VaultStatus } from "../shared/protocol";
 import { BrokerClient } from "./broker";
-import { Decisions } from "./decide";
-import * as passkeys from "./passkeys";
+import { Decisions, type PendingSaveInfo } from "./decide";
 import { local } from "./storage";
-
-/** Set by `bun run build --firefox`: there the decisions are made in an extension window (see decide.ts). */
-declare const __FIREFOX__: boolean;
 
 // Content scripts can read storage.local unless it is restricted: do it the moment the worker
 // starts (every later read and write waits for it, see storage.ts).
@@ -37,6 +50,14 @@ const broker = new BrokerClient((state) => {
 
 /** How long a captured login waits for the page after the sign-in to ask about it. */
 const PENDING_TTL_MS = 2 * 60_000;
+/** How long the account name from a two-step sign-in's first step is kept for the password step. */
+const SEEN_USER_TTL_MS = 5 * 60_000;
+/** How long the worker waits for the app to say whether a captured login is saved already. */
+const CHECK_LOGIN_TIMEOUT_MS = 5_000;
+/** How long a page load's question waits for a connection that is already being made (never one it starts). */
+const CONNECTING_WAIT_MS = 2_000;
+/** The connection states a sign-in the user sent may reconnect from: nothing is open, nothing was refused. */
+const RECONNECT_FROM = new Set(["disconnected", "appNotRunning"]);
 /** The popup closes when Windows Hello takes the focus: the list it asked for stays this long. */
 const LOGIN_LIST_TTL_MS = 2 * 60_000;
 const LOGIN_LIST_KEY = "logins:all";
@@ -47,8 +68,19 @@ interface Pending extends PendingSave {
   password: string;
   tabId: number;
   at: number;
-  /** Firefox: the save window was opened for this capture already (it is not reopened on every page load). */
+  /**
+   * The save panel (or window) was opened by itself for this capture already, by decision
+   * `decisionId`: later pages of the tab take that decision over instead of opening it again (decide.ts).
+   */
   offered?: boolean;
+  decisionId?: string;
+  /**
+   * The user sent this sign-in (a trusted click or Enter key, `capture`'s `byUser`). Only such a capture is checked
+   * with the app (`checkLogin`): a page script can fill a guess and submit it itself, and whether an offer follows
+   * would tell it whether the guess is the saved login. Any other capture is offered as it is, never dropped as
+   * unchanged and never marked as an update. Missing (a capture stored by an older worker) counts as not sent by the user.
+   */
+  byUser?: boolean;
 }
 
 // ---- who is asking ----
@@ -77,7 +109,7 @@ function frameOrigin(sender: chrome.runtime.MessageSender): string {
 }
 
 function fromContentScript(sender: chrome.runtime.MessageSender): sender is chrome.runtime.MessageSender & { tab: chrome.tabs.Tab } {
-  // The extension's own pages (popup, decision window) are chrome-extension:// or moz-extension://.
+  // The extension's own pages (popup, decision panel or window) are chrome-extension:// or moz-extension://.
   return !!sender.tab && sender.id === chrome.runtime.id && !sender.url?.startsWith(chrome.runtime.getURL(""));
 }
 
@@ -104,8 +136,13 @@ async function neverSave(): Promise<string[]> {
 
 // ---- handlers ----
 
-async function findLogins(sender: chrome.runtime.MessageSender, interactive: boolean): Promise<FindLoginsReply> {
-  return findLoginsFor(frameOrigin(sender), interactive);
+/**
+ * What a content script learns for its field's badge: whether LocalPass can be used here and has logins for
+ * the frame's site. Never their titles or user names: those are shown only in LocalPass's own panel.
+ */
+async function siteStatus(sender: chrome.runtime.MessageSender, interactive: boolean): Promise<SiteStatus> {
+  const reply = await findLoginsFor(frameOrigin(sender), interactive);
+  return { status: reply.status, hasLogins: reply.logins.length > 0 };
 }
 
 async function findLoginsFor(origin: string, interactive: boolean): Promise<FindLoginsReply> {
@@ -127,36 +164,101 @@ async function rememberFill(tabId: number, fill: LoginFill) {
   await chrome.storage.session.set({ [`filled:${tabId}`]: { username: fill.username, hash: await sha256Hex(fill.password) } });
 }
 
-async function fill(sender: chrome.runtime.MessageSender, itemId: string): Promise<LoginFill> {
-  const origin = frameOrigin(sender);
-  const fill = await request<LoginFill>("fillLogin", { itemId, origin, force: false });
-  if (sender.tab?.id !== undefined) await rememberFill(sender.tab.id, fill);
-  return fill;
+/** The account name typed into the first step of a two-step sign-in (no password box on that page). */
+interface SeenUser {
+  origin: string;
+  username: string;
+  at: number;
+}
+
+/**
+ * Whether two user names name the same account, compared the way the app compares them when it
+ * saves (`Engine::plan_save_login`): surrounding white space ignored, ASCII letters in any case.
+ */
+function sameUsername(a: string, b: string): boolean {
+  const norm = (s: string) => s.trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
+  return norm(a) === norm(b);
 }
 
 /** Captures still being stored, so the page that follows a sign-in doesn't ask too early. */
 const capturing = new Map<number, Promise<void>>();
 
-function capture(sender: chrome.runtime.MessageSender, username: string, password: string): Promise<void> {
+function capture(sender: chrome.runtime.MessageSender, username: string, password: string, byUser: unknown): Promise<void> {
   if (!fromContentScript(sender) || sender.tab.id === undefined || !password) return Promise.resolve();
   // A page can set a field to any value; keep what it can make the worker store (storage.session has a small quota).
   if (typeof username !== "string" || typeof password !== "string") return Promise.resolve();
   if (username.length > MAX_CAPTURE_CHARS || password.length > MAX_CAPTURE_CHARS) return Promise.resolve();
   const tabId = sender.tab.id;
-  const work = storeCapture(sender, tabId, username, password).finally(() => {
-    if (capturing.get(tabId) === work) capturing.delete(tabId);
-  });
+  // Page input like the other fields: only a real `true` counts.
+  const sentByUser = byUser === true;
+  const work = storeCapture(sender, tabId, username, password, sentByUser)
+    .then((stored) => {
+      // The user sent a sign-in that will be offered: connect now, so the page that follows can ask
+      // the app whether it is saved already. Never pairs, never waits.
+      if (stored && sentByUser && RECONNECT_FROM.has(broker.state.phase)) void broker.connect().catch(() => {});
+    })
+    .finally(() => {
+      if (capturing.get(tabId) === work) capturing.delete(tabId);
+    });
   capturing.set(tabId, work);
   return work;
 }
 
-async function storeCapture(sender: chrome.runtime.MessageSender, tabId: number, username: string, password: string) {
+/** Keeps a captured sign-in for an offer; false when it was dropped (never-save site, or what LocalPass filled). */
+async function storeCapture(sender: chrome.runtime.MessageSender, tabId: number, username: string, password: string, byUser: boolean): Promise<boolean> {
   const origin = frameOrigin(sender);
-  if ((await neverSave()).includes(origin)) return;
+  if ((await neverSave()).includes(origin)) return false;
+  // What LocalPass filled in this tab is saved already. A password-only step (the account name was
+  // asked on the page before) captures no user name, so the same password alone is enough then.
   const filled = await sessionGet<{ username: string; hash: string }>(`filled:${tabId}`);
-  if (filled && filled.username === username && filled.hash === (await sha256Hex(password))) return;
-  const pending: Pending = { id: crypto.randomUUID(), origin, username, password, tabId, at: Date.now() };
+  if (filled && filled.hash === (await sha256Hex(password)) && (!username.trim() || sameUsername(filled.username, username))) return false;
+  if (!username.trim()) {
+    // A password-only step: the account is the one typed into this site's first step, if that was recent.
+    const seen = await sessionGet<SeenUser>(`seenUser:${tabId}`);
+    if (seen && seen.origin === origin && Date.now() - seen.at <= SEEN_USER_TTL_MS) username = seen.username;
+  }
+  // (A user name taken from the step before keeps this capture's `byUser`: what that step's page put in its box
+  // could be changed by the page during the user's own Enter or click on this step too.)
+  const pending: Pending = { id: crypto.randomUUID(), origin, username, password, tabId, at: Date.now(), byUser };
   await chrome.storage.session.set({ [`pending:${tabId}`]: pending });
+  return true;
+}
+
+/**
+ * The first step of a two-step sign-in was sent: remember the account name for the password step
+ * that follows. It is page input, so it gets the checks a capture gets, and it is kept only in
+ * session storage, for this tab and the frame's own site.
+ */
+async function seenUser(sender: chrome.runtime.MessageSender, username: unknown): Promise<void> {
+  if (!fromContentScript(sender) || sender.tab.id === undefined) return;
+  if (typeof username !== "string" || username.length > MAX_CAPTURE_CHARS || !username.trim()) return;
+  const record: SeenUser = { origin: frameOrigin(sender), username, at: Date.now() };
+  await chrome.storage.session.set({ [`seenUser:${sender.tab.id}`]: record });
+}
+
+/**
+ * Asks the app what saving the captured login would do. Only on a connection that is already up:
+ * a page load never connects or starts the app. `null` when it cannot be known (locked, not
+ * connected, no answer, or an app older than `checkLogin`): the offer is made as before. Asked only for a capture
+ * the user sent (`Pending.byUser`).
+ */
+async function savedState(pending: Pending): Promise<"new" | "update" | "unchanged" | null> {
+  if (broker.state.phase === "connecting") {
+    // A connection being made (a sign-in the user sent started it): wait for it a little. This
+    // never starts one: `whenReady` only joins the connection that is already being opened.
+    await Promise.race([broker.whenReady().catch(() => {}), new Promise((r) => setTimeout(r, CONNECTING_WAIT_MS))]);
+  }
+  if (broker.state.phase !== "ready") return null;
+  try {
+    const answer = await Promise.race([
+      request<{ status?: unknown }>("checkLogin", { origin: pending.origin, username: pending.username, password: pending.password }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), CHECK_LOGIN_TIMEOUT_MS)),
+    ]);
+    const status = answer?.status;
+    return status === "new" || status === "update" || status === "unchanged" ? status : null;
+  } catch {
+    return null;
+  }
 }
 
 async function pendingFor(tabId: number): Promise<Pending | null> {
@@ -170,26 +272,93 @@ async function pendingFor(tabId: number): Promise<Pending | null> {
   return pending;
 }
 
-async function pendingSave(sender: chrome.runtime.MessageSender): Promise<PendingSave | null> {
+/** One offer at a time per tab: the app is asked between reading and marking a capture. */
+const offering = new Map<number, Promise<unknown>>();
+
+/** The top page of a tab asks whether there is a capture to offer: it learns only its id, which it passes to `decide`. */
+async function pendingSave(sender: chrome.runtime.MessageSender): Promise<PendingSaveRef | null> {
   if (!fromContentScript(sender) || sender.tab.id === undefined || sender.frameId !== 0) return null;
-  const pending = await pendingFor(sender.tab.id);
+  const tabId = sender.tab.id;
+  const turn = (offering.get(tabId) ?? Promise.resolve()).catch(() => {}).then(() => offerPending(tabId));
+  offering.set(tabId, turn);
+  void turn.finally(() => offering.get(tabId) === turn && offering.delete(tabId)).catch(() => {});
+  const pending = await turn;
+  return pending ? { id: pending.id } : null;
+}
+
+async function offerPending(tabId: number): Promise<PendingSave | null> {
+  let pending = await pendingFor(tabId);
   if (!pending) return null;
-  if (__FIREFOX__) {
-    // A window, not a bar: ask once per capture, or every page load would raise it again.
-    if (pending.offered) return null;
-    await chrome.storage.session.set({ [`pending:${sender.tab.id}`]: { ...pending, offered: true } });
+  // Every page of the tab gets the capture and asks for the decision; the background opens the panel by
+  // itself only for the first (`offered`), later pages take the open decision over (decide.ts).
+  let learned = false;
+  // Only a sign-in the user sent is checked with the app (see `Pending.byUser`): anything else is offered as it is.
+  if (pending.update === undefined && pending.byUser === true) {
+    // Only a new login or a changed password is offered: one the app has already is dropped.
+    const state = await savedState(pending);
+    if (state === "unchanged") {
+      await dropPending(tabId, pending.id);
+      return null;
+    }
+    // The capture may have been answered or replaced while the app was asked.
+    const now = await pendingFor(tabId);
+    if (!now || now.id !== pending.id) return null;
+    // Asked once per capture; a later page load of the same capture reuses the answer.
+    if (state) {
+      pending = { ...now, update: state === "update" };
+      learned = true;
+    }
   }
-  return { id: pending.id, origin: pending.origin, username: pending.username };
+  if (learned) await chrome.storage.session.set({ [`pending:${tabId}`]: pending });
+  return shownPending(pending);
 }
 
-async function pendingInfo(tabId: number, id: string): Promise<PendingSave | null> {
+/** What the decision panel learns about a capture (never the password; the page learns only the id). */
+function shownPending(pending: Pending): PendingSave {
+  const shown: PendingSave = { id: pending.id, origin: pending.origin, username: pending.username };
+  if (pending.update) shown.update = true;
+  return shown;
+}
+
+/** Removes the tab's capture if it is still this one. */
+async function dropPending(tabId: number, id: string) {
+  const now = await sessionGet<Pending>(`pending:${tabId}`);
+  if (now?.id === id) await chrome.storage.session.remove(`pending:${tabId}`);
+}
+
+async function pendingInfo(tabId: number, id: string): Promise<PendingSaveInfo | null> {
   const pending = await pendingFor(tabId);
-  return pending && pending.id === id ? { id: pending.id, origin: pending.origin, username: pending.username } : null;
+  return pending && pending.id === id ? decisionView(pending) : null;
 }
 
-async function savePending(sender: chrome.runtime.MessageSender, id: string): Promise<SaveOutcome> {
-  if (!fromContentScript(sender) || sender.tab.id === undefined) throw new BrokerError("forbidden", "not from a page");
-  return savePendingFor(sender.tab.id, id);
+/** What the decisions learn about a capture: what the panel shows, its life, and whether it was offered. */
+function decisionView(pending: Pending): PendingSaveInfo {
+  return { ...shownPending(pending), expiresAt: pending.at + PENDING_TTL_MS, offered: pending.offered, decisionId: pending.decisionId };
+}
+
+/** The capture was offered by this decision (in the per-tab queue, so it never races `offerPending`'s write). */
+function markOffered(tabId: number, id: string, decisionId: string): Promise<void> {
+  const turn = (offering.get(tabId) ?? Promise.resolve())
+    .catch(() => {})
+    .then(async () => {
+      const now = await sessionGet<Pending>(`pending:${tabId}`);
+      if (now?.id === id) await chrome.storage.session.set({ [`pending:${tabId}`]: { ...now, offered: true, decisionId } });
+    });
+  offering.set(tabId, turn);
+  void turn.finally(() => offering.get(tabId) === turn && offering.delete(tabId)).catch(() => {});
+  return turn;
+}
+
+/** The captures whose save offer is open (after a restart of the background, decide.ts lets them wait again). */
+async function offeredCaptures(): Promise<{ tabId: number; pending: PendingSaveInfo }[]> {
+  const stored = await chrome.storage.session.get(null);
+  const out: { tabId: number; pending: PendingSaveInfo }[] = [];
+  for (const [key, value] of Object.entries(stored)) {
+    if (!key.startsWith("pending:")) continue;
+    const pending = value as Pending;
+    if (pending?.offered && Date.now() - pending.at <= PENDING_TTL_MS) out.push({ tabId: pending.tabId, pending: decisionView(pending) });
+  }
+  return out;
 }
 
 async function savePendingFor(tabId: number, id: string): Promise<SaveOutcome> {
@@ -207,11 +376,6 @@ async function savePendingFor(tabId: number, id: string): Promise<SaveOutcome> {
   }
   await chrome.storage.session.remove(`pending:${tabId}`);
   return outcome;
-}
-
-async function dismissPending(sender: chrome.runtime.MessageSender, id: string, never: boolean) {
-  if (!fromContentScript(sender) || sender.tab.id === undefined) return;
-  return dismissPendingFor(sender.tab.id, id, never);
 }
 
 async function dismissPendingFor(tabId: number, id: string, never: boolean) {
@@ -306,13 +470,14 @@ const decisions = new Decisions({
   findLogins: (origin) => findLoginsFor(origin, true),
   rememberFill,
   pendingInfo,
+  markOffered,
   savePending: savePendingFor,
   dismissPending: dismissPendingFor,
 });
 
-/** The frame a Firefox decision is for. Chrome never uses decisions: its in-page controls decide. */
+/** The frame a decision is for, as the browser reports it: only a page's content script asks for one. */
 function asker(sender: chrome.runtime.MessageSender, fromPage: boolean) {
-  if (!__FIREFOX__ || !fromPage || sender.tab?.id === undefined) throw new BrokerError("forbidden", "not available here");
+  if (!fromPage || sender.tab?.id === undefined) throw new BrokerError("forbidden", "not available here");
   return { tabId: sender.tab.id, frameId: sender.frameId ?? 0, origin: frameOrigin(sender) };
 }
 
@@ -324,30 +489,23 @@ async function handle(message: ToBackground, sender: chrome.runtime.MessageSende
     if (fromPage) throw new BrokerError("forbidden", "not available to pages");
   };
   switch (message.kind) {
+    // ---- a page's content script ----
     case "findLogins":
-      return findLogins(sender, message.interactive);
-    case "fill":
-      return fill(sender, message.itemId);
+      return siteStatus(sender, message.interactive);
     case "capture":
-      return capture(sender, message.username, message.password);
+      return capture(sender, message.username, message.password, message.byUser);
+    case "seenUser":
+      return seenUser(sender, message.username);
     case "pendingSave":
       return pendingSave(sender);
-    case "savePending":
-      return savePending(sender, message.id);
-    case "dismissPending":
-      return dismissPending(sender, message.id, message.never);
-    case "passkeyCandidates":
-      return passkeys.candidates(request, frameOrigin(sender), message.rpId, message.allow);
-    case "passkeyCreate":
-      if (!fromPage) throw new BrokerError("forbidden", "passkeys are only created for pages");
-      return passkeys.create(request, frameOrigin(sender), message.request);
-    case "passkeyAssert":
-      if (!fromPage) throw new BrokerError("forbidden", "passkeys are only used for pages");
-      return passkeys.assert(request, frameOrigin(sender), message.itemId, message.rpId, message.challenge, message.uv);
+    case "passkeysEnabled":
+      return passkeysEnabled();
     case "decide":
       return decisions.open(asker(sender, fromPage), message.ref, message.request);
     case "decideCancel":
       return decisions.withdraw(asker(sender, fromPage), message.ref);
+    case "decidePing":
+      return decisions.ping(asker(sender, fromPage), message.ref);
     case "decisionInfo":
       return decisions.info(sender, message.id);
     case "decisionLogins":
@@ -356,7 +514,11 @@ async function handle(message: ToBackground, sender: chrome.runtime.MessageSende
       return decisions.candidates(sender, message.id);
     case "decisionAnswer":
       return decisions.answer(sender, message.id, message.answer);
+    case "decisionUnlock":
+      return decisions.unlock(sender, message.id);
+    // ---- the popup ----
     case "unlock":
+      popupOnly();
       return request("unlock");
     case "state":
       popupOnly();
@@ -371,14 +533,9 @@ async function handle(message: ToBackground, sender: chrome.runtime.MessageSende
     case "cachedLogins":
       popupOnly();
       return cachedLogins();
-    case "passkeysEnabled":
-      return passkeysEnabled();
     case "fillTab":
       popupOnly();
       return fillTab(message.tabId, message.itemId, message.force);
-    case "generate":
-      // Open to pages: the in-page "Generate a strong password" row asks, and a random password reveals nothing.
-      return request("generatePassword");
     case "getPrivacy":
       popupOnly();
       return privacy();
@@ -386,6 +543,9 @@ async function handle(message: ToBackground, sender: chrome.runtime.MessageSende
       popupOnly();
       return setPrivacy(message.disableBrowserManager);
   }
+  // Anything else (also the messages the in-page controls of earlier versions sent: fill, savePending,
+  // dismissPending, passkeyCandidates, passkeyCreate, passkeyAssert, generate) is refused.
+  throw new BrokerError("forbidden", "unknown request");
 }
 
 chrome.runtime.onMessage.addListener((message: ToBackground | { kind: "brokerState" }, sender, sendResponse) => {
@@ -404,13 +564,16 @@ chrome.runtime.onInstalled.addListener(() => void broker.connect().catch(() => {
 // A pending sign-in capture belongs to its tab.
 chrome.tabs.onRemoved.addListener((tabId) => {
   decisions.onTabRemoved(tabId);
-  void chrome.storage.session.remove([`pending:${tabId}`, `filled:${tabId}`]);
+  void chrome.storage.session.remove([`pending:${tabId}`, `filled:${tabId}`, `seenUser:${tabId}`, `decidePanel:${tabId}`]);
 });
-if (__FIREFOX__) {
-  chrome.windows.onRemoved.addListener((windowId) => decisions.onWindowRemoved(windowId));
-  chrome.windows.onFocusChanged.addListener((windowId) => decisions.onFocusChanged(windowId));
-  chrome.tabs.onUpdated.addListener((tabId, change) => decisions.onTabUpdated(tabId, change));
-  chrome.tabs.onActivated.addListener((info) => decisions.onTabActivated(info));
-  // The decision UI's port reports dismissal; its periodic messages keep the event page alive.
-  chrome.runtime.onConnect.addListener((port) => void decisions.attach(port));
-}
+// The decisions' listeners, registered at once at the top level so a restarted worker hears the events.
+chrome.windows.onRemoved.addListener((windowId) => decisions.onWindowRemoved(windowId));
+chrome.windows.onFocusChanged.addListener((windowId) => decisions.onFocusChanged(windowId));
+chrome.tabs.onUpdated.addListener((tabId, change) => decisions.onTabUpdated(tabId, change));
+chrome.tabs.onActivated.addListener((info) => decisions.onTabActivated(info));
+// The decision UI's port reports dismissal; its periodic messages keep the worker (or event page) alive.
+chrome.runtime.onConnect.addListener((port) => void decisions.attach(port));
+// The worker may have been stopped while a decision was open (Chrome stops an idle service worker, Firefox
+// suspends an idle event page): no tab keeps a panel of a forgotten decision, and a save that was offered and is
+// still valid waits again.
+void decisions.restore(offeredCaptures);

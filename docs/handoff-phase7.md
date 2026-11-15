@@ -18,6 +18,8 @@ Rules (the plan's "Working rules"; the agent rule itself is in `CLAUDE.md`, "Wor
 - One task per fresh chat. 7.0-7.3 are small and independent; do the later tasks in the order of the plan.
 - No agents by default. One only for an independent look (audit, review of a finished task, second opinion), briefed with the goal, the files or
   the diff and the questions, not your conclusions; read-only; check every finding against the code before acting.
+  *(Note 2026-11-12: this rule changed for Phase 8 at the user's request: subagents now do the coding, one task per agent, and the main session
+  plans, briefs and checks. The new rule is in `CLAUDE.md`, "Working with agents", and `docs/handoff-phase8.md`.)*
 - Builds and e2e run in the background. Never commit or push unless the user asks. Experiments use `LOCALPASS_PROFILE=dev` (or `dev2`).
   **Never start the installed `localpass` binary, even for `--version`: it is the real app and opens the real profile** (`localpass --version` hung instead
   of printing a version, so it was starting the app; it was stopped and left no process, the vault files were not touched). Tests never touch the real keyring or `~/.mozilla`.

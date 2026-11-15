@@ -1,12 +1,18 @@
-// The decision page (Firefox only), in a toolbar panel or separate window. The background opened it for one request and
-// tells it what the request is (`decisionInfo`); the user decides here, and the background carries
-// the answer out and hands any secret to the page's content script, never to this window. Everything
-// the page supplied is shown only as text, through `displayText`, after the site the browser reported.
+// The decision page, in every browser: in the toolbar panel, or a separate window where the browser cannot open the
+// panel without a click. It is the only place where the user picks a login (or a generated password, or a passkey for
+// a page's pending sign-in), saves one, or confirms a passkey. The background opened it for one request and tells it
+// what the request is (`decisionInfo`); the user decides here, and the background carries the answer out and hands
+// any secret to the page's content script, never to this page. Everything the page supplied is shown only as text,
+// through `displayText`, after the site the browser reported.
+// A panel can be closed and shown again (toolbar icon) while a save or passkey request waits: each showing
+// starts afresh from `decisionInfo`, with the same hold on every acting control (none when the user opened it).
+// Keys: Up and Down move between the rows, Enter or Space acts on the focused one, Esc closes.
 
 import { displayText } from "../shared/limits";
-import type { DecisionAnswer, DecisionDone, DecisionInfo, FindLoginsReply, Reply, ToBackground } from "../shared/messages";
+import type { DecisionAnswer, DecisionDone, DecisionInfo, FindLoginsReply, PanelNote, Reply, ToBackground } from "../shared/messages";
+import { userCheckName } from "../shared/platform";
 import { BrokerError, type PasskeyCandidate } from "../shared/protocol";
-import { createDialogLines, describePasskey } from "../shared/shown";
+import { createDialogLines, describePasskey, saveOffer } from "../shared/shown";
 import { timing } from "./timing";
 
 const id = new URLSearchParams(location.search).get("id") ?? "";
@@ -59,23 +65,82 @@ interface Row {
   onSelect: () => void;
 }
 
-/** The controls that act for the user (everything but the safe buttons): disabled for `timing.holdMs` after each view and each focus. */
+/**
+ * The hold: for `timing.holdMs` after each view and each return to the window, the controls that act for the user
+ * (everything but the safe buttons) do nothing, whether clicked or pressed with Enter or Space. They are not greyed
+ * out (`disabled` would dim them); they say so to assistive technology with `aria-disabled`.
+ *
+ * A panel the user opened (toolbar icon or shortcut) skips the hold: the background tells it so over its port
+ * (`PanelNote.userOpened`), and only when it did not itself ask the browser to open that panel. Nothing a page or
+ * a content script sends can say so. Until then, and in every panel a page caused, the hold applies. Once the panel
+ * has lost the focus (or was hidden), coming back holds again, also in a panel the user opened: the user may have
+ * been typing elsewhere. Its own first focus as it opens (measured: every panel gets one) is not a return.
+ */
 let guarded: HTMLButtonElement[] = [];
+/** What each acting control does, for a click and for Enter or Space on it. */
+const actions = new WeakMap<EventTarget, () => void>();
+let held = false;
 let holdTimer: ReturnType<typeof setTimeout> | undefined;
+/** The background said the user opened this panel (never set in a separate window). */
+let userOpened = false;
+/** The panel lost the focus or was hidden at least once since it opened. */
+let away = false;
+
+function setHeld(on: boolean) {
+  held = on;
+  for (const control of guarded) {
+    if (on) control.setAttribute("aria-disabled", "true");
+    else control.removeAttribute("aria-disabled");
+  }
+}
 
 function hold() {
   clearTimeout(holdTimer);
-  for (const control of guarded) control.disabled = true;
-  const release = () => {
-    for (const control of guarded) control.disabled = false;
-  };
-  if (timing.holdMs <= 0) release();
-  else holdTimer = setTimeout(release, timing.holdMs);
+  if ((userOpened && !away) || timing.holdMs <= 0) return setHeld(false);
+  setHeld(true);
+  holdTimer = setTimeout(() => setHeld(false), timing.holdMs);
+}
+
+/** Runs an acting control's action, unless the hold is on. */
+function act(control: EventTarget) {
+  if (held) return;
+  actions.get(control)?.();
 }
 
 // Coming back to the window starts the wait again (the user may be typing in another window).
 window.addEventListener("focus", hold);
-document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && hold());
+window.addEventListener("blur", () => void (away = true));
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") hold();
+  else away = true;
+});
+
+const plainKey = (e: KeyboardEvent) => !(e.isComposing || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey);
+
+// Enter and Space on an acting control: only a fresh key press (never one held down) and never during the hold.
+// The browser's own activation is always stopped, so it cannot act past these rules.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  if (!e.target || !actions.has(e.target)) return;
+  e.preventDefault();
+  if (e.repeat || !plainKey(e)) return;
+  act(e.target);
+});
+document.addEventListener("keyup", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target && actions.has(e.target)) e.preventDefault();
+});
+
+// Up and Down move between the rows (a picker's logins, generated password and passkeys). Moving does not act,
+// so it works during the hold; Enter on the row still waits for the hold to end.
+document.addEventListener("keydown", (e) => {
+  if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || !plainKey(e)) return;
+  const rows = [...main.querySelectorAll<HTMLButtonElement>("button.row")];
+  if (!rows.length) return;
+  e.preventDefault();
+  const at = rows.indexOf(document.activeElement as HTMLButtonElement);
+  const next = e.key === "ArrowDown" ? (at < 0 ? 0 : Math.min(at + 1, rows.length - 1)) : at < 0 ? rows.length - 1 : Math.max(at - 1, 0);
+  rows[next]!.focus();
+});
 
 // ---- closing without choosing: Esc, and a click outside for the two decisions that can be taken back ----
 
@@ -106,10 +171,12 @@ document.addEventListener("keydown", (e) => {
 });
 
 /**
- * A click outside takes focus away. Only for choosing a login and for saving one: a passkey window is the
- * answer to a site's own WebAuthn call, which a stray click on the page must not silently fail.
+ * A click outside takes focus away. Only for choosing a login and, in a window, for saving one: a passkey
+ * window is the answer to a site's own WebAuthn call, which a stray click on the page must not silently fail.
+ * In the toolbar panel the browser itself closes the panel on a click outside, and the background decides
+ * what that means: a save offer then waits (badge on the toolbar icon), it is not "Not now".
  */
-const outsideCloses = () => (decision === "chooseLogin" || decision === "saveLogin") && hadFocus && !working && !!dismiss;
+const outsideCloses = () => (decision === "chooseLogin" || (!panel && decision === "saveLogin")) && hadFocus && !working && !!dismiss;
 window.addEventListener("focus", () => {
   hadFocus = true;
   clearTimeout(outsideTimer);
@@ -131,7 +198,8 @@ function show(lines: string[], buttons: Button[] = [], rows: Row[] = []) {
       const button = el("button", "row", r.label);
       button.type = "button";
       if (r.sub) button.append(el("span", "sub", r.sub));
-      button.addEventListener("click", r.onSelect);
+      actions.set(button, r.onSelect);
+      button.addEventListener("click", () => act(button));
       guarded.push(button);
       list.append(button);
     }
@@ -141,8 +209,12 @@ function show(lines: string[], buttons: Button[] = [], rows: Row[] = []) {
   for (const b of buttons) {
     const button = el("button", `${b.primary ? "primary" : ""}${b.safe ? " safe" : ""}`.trim(), b.label);
     button.type = "button";
-    button.addEventListener("click", b.onClick);
-    if (!b.safe) guarded.push(button);
+    if (b.safe) button.addEventListener("click", b.onClick);
+    else {
+      actions.set(button, b.onClick);
+      button.addEventListener("click", () => act(button));
+      guarded.push(button);
+    }
     bar.append(button);
   }
   nodes.push(bar);
@@ -154,13 +226,19 @@ function show(lines: string[], buttons: Button[] = [], rows: Row[] = []) {
   (main.querySelector("button.safe") as HTMLElement | null)?.focus();
 }
 
+/** While LocalPass works: the app may ask the user to confirm (Windows Hello on Windows, the master password elsewhere). */
+let confirmLine = "Confirm in the LocalPass app if it asks.";
+void userCheckName()
+  .then((name) => (confirmLine = `Confirm with ${name} if it asks.`))
+  .catch(() => {});
+
 const cancel: Button = { label: "Cancel", safe: true, dismiss: true, onClick: () => void answer({ action: "cancel" }).catch(() => window.close()) };
 const close: Button = { label: "Close", safe: true, dismiss: true, onClick: () => cancel.onClick() };
 const another: Button = { label: "Use another method", safe: true, onClick: () => void answer({ action: "fallback" }).catch(() => window.close()) };
 
 /** Sends the answer; the background closes this window when it worked. */
 async function carryOut(a: DecisionAnswer, failed: string, extra: Button[]) {
-  show(["Waiting for LocalPass…", "Confirm in the LocalPass app if it asks."], [cancel]);
+  show(["Waiting for LocalPass…", confirmLine], [cancel]);
   working = true;
   try {
     const done = await answer(a);
@@ -176,13 +254,26 @@ async function carryOut(a: DecisionAnswer, failed: string, extra: Button[]) {
 
 // ---- the four decisions ----
 
+/**
+ * The normal toolbar popup, in place of a panel whose request the background no longer has (never a dead panel).
+ * This panel may have used up the background's count of its own `openPopup` when it attached, so the popup could not
+ * tell it from one the user opened: `from=panel` makes it stay held and focus no Fill, whatever the background says.
+ */
+function toPopup() {
+  location.replace(chrome.runtime.getURL("popup.html?from=panel"));
+}
+
+/** "The last try did not work": a failure while the panel was closed, shown when it is shown again. */
+const failedLines = (info: DecisionInfo) => (info.failed ? [`The last try did not work: ${text(info.failed)}`] : []);
+
 function unlockButton(again: () => void): Button {
   return {
     label: "Unlock",
     primary: true,
     onClick: () => {
       working = true;
-      void ask({ kind: "unlock" })
+      // The background follows the Unlock: if the app's prompt closes this panel, it opens it again afterwards.
+      void ask({ kind: "decisionUnlock", id })
         .catch(() => undefined)
         .then(() => {
           working = false;
@@ -193,7 +284,7 @@ function unlockButton(again: () => void): Button {
 }
 
 function createPasskey(info: Extract<DecisionInfo, { decision: "passkeyCreate" }>) {
-  show(createDialogLines(info.request, info.host), [
+  show([...createDialogLines(info.request, info.host), ...failedLines(info)], [
     { label: "Create passkey", primary: true, onClick: () => void carryOut({ action: "create" }, "Could not create the passkey.", [another]) },
     another,
     cancel,
@@ -212,17 +303,18 @@ async function choosePasskey(info: Extract<DecisionInfo, { decision: "passkeyGet
   }
   if (!found.length) return void answer({ action: "fallback" }).catch(() => window.close());
   show(
-    [displayText(info.rpId || info.host, 253), "Choose a passkey to sign in with:"],
+    [displayText(info.rpId || info.host, 253), "Choose a passkey to sign in with:", ...failedLines(info)],
     [another, cancel],
     found.map((c) => ({ ...describePasskey(c), onSelect: () => void carryOut({ action: "assert", itemId: c.itemId }, "Could not sign in.", [another]) })),
   );
 }
 
 function saveLogin(info: Extract<DecisionInfo, { decision: "saveLogin" }>) {
+  const offer = saveOffer(!!info.update);
   show(
-    ["Save this login to LocalPass?", `${displayText(info.username, 60) || "(no username)"} on ${displayText(info.host, 80)}`],
+    [offer.question, `${displayText(info.username, 60) || "(no username)"} on ${displayText(info.host, 80)}`, ...failedLines(info)],
     [
-      { label: "Save", primary: true, onClick: () => void carryOut({ action: "save" }, "Could not save the login.", []) },
+      { label: offer.button, primary: true, onClick: () => void carryOut({ action: "save" }, offer.failed, []) },
       { label: "Not now", safe: true, dismiss: true, onClick: cancel.onClick },
       { label: "Never for this site", onClick: () => void answer({ action: "never" }).catch(() => window.close()) },
     ],
@@ -248,22 +340,34 @@ async function chooseLogin(info: Extract<DecisionInfo, { decision: "chooseLogin"
   }
   if (reply.status === "locked") return show(["LocalPass is locked.", "Unlock it to see your logins."], [unlockButton(() => void chooseLogin(info)), close]);
   if (reply.status !== "ok") return show([WHY[reply.status] ?? "Can't reach LocalPass. Check that the app is running, then try again."], [close]);
-  if (!reply.logins.length) return show([`No saved logins for ${displayText(info.host, 80)} yet.`], [close]);
-  show(
-    [`Fill a login for ${displayText(info.host, 80)}`],
-    [cancel],
-    reply.logins.map((l) => ({
+  // The page's pending passkey sign-in (Chrome): its passkeys first. None, or locked: no rows (the logins tell why).
+  let found: PasskeyCandidate[] = [];
+  if (info.passkeys) found = await ask<PasskeyCandidate[]>({ kind: "decisionCandidates", id }).catch(() => []);
+  const rows: Row[] = [
+    ...found.map((c) => {
+      const text = describePasskey(c);
+      return { label: `Passkey: ${text.label}`, sub: text.sub, onSelect: () => void carryOut({ action: "assert", itemId: c.itemId }, "Could not sign in.", []) };
+    }),
+    ...reply.logins.map((l) => ({
       label: displayText(l.title, 80) || displayText(l.username, 80),
       sub: displayText(l.username, 80) || "(no username)",
       onSelect: () => void carryOut({ action: "fill", itemId: l.id }, "Could not fill the login.", []),
     })),
-  );
+  ];
+  // A form that asks for a new password (sign-up, change password): the page's hint, so at worst a random password is offered.
+  if (info.newPassword) {
+    rows.push({ label: "Generate a strong password", sub: "Fills the new password boxes", onSelect: () => void carryOut({ action: "generate" }, "Could not make a password.", []) });
+  }
+  const host = displayText(info.host, 80);
+  if (!rows.length) return show([`No saved logins for ${host} yet.`], [close]);
+  show([found.length || reply.logins.length ? `Fill a login for ${host}` : `No saved logins for ${host} yet.`], [cancel], rows);
 }
 
 /**
  * Firefox suspends the background (an event page) after about 30 seconds without events, and an open
- * port does not stop that (measured, 6.6b): the decision would be forgotten while the user is still
- * reading. A message every few seconds keeps it awake, and also notices when it was forgotten anyway.
+ * port does not stop that (measured, 6.6b); Chrome stops an idle service worker after 30 seconds without
+ * events. The decision would be forgotten while the user is still reading. A message every few seconds
+ * keeps it awake, and also notices when it was forgotten anyway.
  */
 function keepAlive() {
   const timer = setInterval(() => {
@@ -271,6 +375,7 @@ function keepAlive() {
     ask<DecisionInfo>({ kind: "decisionInfo", id }).catch((e) => {
       if (code(e) !== "notFound") return;
       clearInterval(timer);
+      if (panel) return toPopup();
       show(["This request is no longer open.", "LocalPass forgot it. Try again from the page."], [{ label: "Close", safe: true, dismiss: true, onClick: () => window.close() }]);
     });
   }, timing.keepAliveMs);
@@ -280,15 +385,50 @@ async function start() {
   // Closing the window ends the port, which the background takes as "no".
   const port = chrome.runtime.connect({ name: `decide:${id}` });
   if (panel) port.onDisconnect.addListener(() => window.close());
+  // Only the background can send on this port: it says so when the user opened this panel (no hold then).
+  if (panel)
+    port.onMessage?.addListener((note: PanelNote) => {
+      if (note?.userOpened !== true || userOpened) return;
+      userOpened = true;
+      hold();
+    });
   keepAlive();
   let info: DecisionInfo;
   try {
     info = await ask<DecisionInfo>({ kind: "decisionInfo", id });
   } catch (e) {
+    // A panel the toolbar still showed for a request that is gone (the background restarted): the normal popup.
+    if (panel && code(e) === "notFound") return toPopup();
     return show(["This request is no longer open.", text(e)], [{ label: "Close", safe: true, dismiss: true, onClick: () => window.close() }]);
   }
   siteLabel.textContent = displayText(info.host, 80);
   decision = info.decision;
+  render(info);
+}
+
+/**
+ * Shown again while the background still carries out an answer given in an earlier showing (the app's prompt
+ * took the focus and closed the panel): wait for it, then show the decision (with what went wrong, if it failed).
+ * When it worked the background ends the decision, and this panel closes with its port.
+ */
+function waitForWork() {
+  show(["Waiting for LocalPass…", confirmLine], [cancel]);
+  working = true;
+  const poll = setInterval(() => {
+    ask<DecisionInfo>({ kind: "decisionInfo", id }).then(
+      (next) => {
+        if (next.working) return;
+        clearInterval(poll);
+        working = false;
+        render(next);
+      },
+      () => clearInterval(poll),
+    );
+  }, timing.pollMs);
+}
+
+function render(info: DecisionInfo) {
+  if (info.working) return waitForWork();
   switch (info.decision) {
     case "passkeyCreate":
       return createPasskey(info);

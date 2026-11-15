@@ -1,6 +1,6 @@
 //! Registers the LocalPass native-messaging host with the browsers, per user (no administrator
 //! rights). The host is the app's own executable: see `native_host`. Windows writes registry keys
-//! for Chrome and Edge; Linux writes Firefox's host manifest file.
+//! for Chrome and Edge; Linux writes host manifest files for Firefox and the Chromium browsers.
 
 #[cfg(target_os = "linux")]
 mod linux;

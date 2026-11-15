@@ -90,6 +90,8 @@ export interface FakeChrome {
   sentToTabs: { tabId: number; message: unknown; options: unknown }[];
   /** Runs before the next tabs.get answers (to change the tab mid-flight). */
   beforeTabGet: (() => void) | null;
+  /** What `runtime.getPlatformInfo` reports as the OS ("win" unless a test changes it). */
+  os: string;
 }
 
 export function installChrome(): FakeChrome {
@@ -102,6 +104,7 @@ export function installChrome(): FakeChrome {
     onMessage: null,
     sentToTabs: [],
     beforeTabGet: null,
+    os: "win",
   };
   const noEvent = { addListener() {} };
   (globalThis as unknown as { chrome: unknown }).chrome = {
@@ -116,6 +119,7 @@ export function installChrome(): FakeChrome {
         return port;
       },
       sendMessage: async () => undefined,
+      getPlatformInfo: async () => ({ os: fake.os, arch: "x86-64", nacl_arch: "x86-64" }),
       onMessage: {
         addListener(f: FakeChrome["onMessage"]) {
           fake.onMessage = f;
@@ -123,6 +127,7 @@ export function installChrome(): FakeChrome {
       },
       onStartup: noEvent,
       onInstalled: noEvent,
+      onConnect: noEvent,
     },
     storage: { local: fake.local, session: fake.session },
     tabs: {
@@ -140,7 +145,10 @@ export function installChrome(): FakeChrome {
         fake.sentToTabs.push({ tabId, message, options });
       },
       onRemoved: noEvent,
+      onUpdated: noEvent,
+      onActivated: noEvent,
     },
+    windows: { get: async (id: number) => ({ id, focused: true }), onRemoved: noEvent, onFocusChanged: noEvent },
     privacy: { services: { passwordSavingEnabled: { get: async () => ({ value: true, levelOfControl: "controllable_by_this_extension" }) } } },
   };
   return fake;
@@ -163,7 +171,9 @@ export function installWindows() {
   const removed: number[] = [];
   const listeners: Array<(windowId: number) => void> = [];
   let next = 100;
-  (globalThis as unknown as { chrome: { windows: unknown } }).chrome.windows = {
+  const c = (globalThis as unknown as { chrome: { windows?: Record<string, unknown> } }).chrome;
+  c.windows = {
+    ...(c.windows ?? {}),
     async create(options: { url: string }) {
       const windowId = ++next;
       created.push({ url: options.url, windowId });
@@ -182,4 +192,28 @@ export function installWindows() {
       for (const f of listeners) f(windowId);
     },
   };
+}
+
+/**
+ * The toolbar (`action`) of a browser that can open the panel by itself (Firefox 160), per tab: popup,
+ * badge and the panels opened. Also the events the Firefox wiring of background/index.ts listens to.
+ * Install it after `installChrome` and before the background is imported.
+ */
+export function installToolbar() {
+  const c = (globalThis as unknown as { chrome: Record<string, Record<string, unknown>> }).chrome;
+  const url = c.runtime!.getURL as (path: string) => string;
+  const state = { popups: new Map<number, string>(), badges: new Map<number, string>(), opened: [] as number[] };
+  const noEvent = { addListener() {} };
+  c.runtime!.getBrowserInfo = async () => ({ version: "160.0" });
+  c.runtime!.onConnect = noEvent;
+  c.tabs!.onUpdated = noEvent;
+  c.tabs!.onActivated = noEvent;
+  c.windows = { ...(c.windows ?? {}), get: async (id: number) => ({ id, focused: true }), onRemoved: noEvent, onFocusChanged: noEvent };
+  c.action = {
+    getPopup: async ({ tabId }: { tabId: number }) => state.popups.get(tabId) ?? url("popup.html"),
+    setPopup: async ({ tabId, popup }: { tabId: number; popup: string }) => void state.popups.set(tabId, popup.includes("://") ? popup : url(popup)),
+    setBadgeText: async ({ tabId, text }: { tabId: number; text: string }) => void state.badges.set(tabId, text),
+    openPopup: async ({ windowId }: { windowId: number }) => void state.opened.push(windowId),
+  };
+  return state;
 }

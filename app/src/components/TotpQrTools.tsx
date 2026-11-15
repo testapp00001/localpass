@@ -115,7 +115,7 @@ export function TotpQrTools({ value, onFound, children }: { value: string; onFou
         </Button>
       </div>
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        Copy a screenshot of the QR code (PrtSc, Win+Shift+S, or “Copy” in your browser’s screenshot tool), then press Ctrl+V here. “Scan QR on
+        Copy a screenshot of the QR code (PrtSc, Win+Shift+S on Windows, or “Copy” in your browser’s screenshot tool), then press Ctrl+V here. “Scan QR on
         screen” makes LocalPass step aside for a moment. A picture file can be dropped here too. Nothing is saved to disk.
       </p>
       <div aria-live="polite">

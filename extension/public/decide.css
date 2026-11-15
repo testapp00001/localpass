@@ -1,4 +1,4 @@
-/* The decision window (Firefox): the popup's look, as a window of its own. */
+/* The decision panel (or window): the popup's look. */
 body { width: auto; }
 body.panel { width: 360px; }
 body.panel main { max-height: 480px; overflow: auto; }

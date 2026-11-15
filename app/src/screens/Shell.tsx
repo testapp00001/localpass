@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Folder, FolderPlus, KeyRound, Laptop, Lock, Pencil, Settings as SettingsIcon, Star, Trash2, Vault as VaultIcon, X } from "lucide-react";
 import { api, errorText, type AppInfo, type FolderView, type SyncStatus } from "../lib/api";
 import { timeAgo } from "../lib/format";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { Button, IconButton, Modal, TextInput } from "../components/ui";
 import { useToast } from "../components/Toaster";
 import { Vault, type Section } from "./Vault";
@@ -45,6 +46,7 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
   const [folders, setFolders] = useState<FolderView[]>([]);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [folderEdit, setFolderEdit] = useState<{ id: string | null; name: string } | null>(null);
+  const [savingFolder, setSavingFolder] = useState(false);
 
   const reloadFolders = useCallback(() => {
     api.folders().then(setFolders).catch(() => {});
@@ -68,21 +70,36 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
   }, []);
 
   const saveFolder = async () => {
-    if (!folderEdit) return;
+    // A second Save (or Enter) while the first runs would create the folder twice.
+    if (!folderEdit || savingFolder) return;
+    setSavingFolder(true);
     try {
       await api.saveFolder(folderEdit.id, folderEdit.name);
       setFolderEdit(null);
       reloadFolders();
     } catch (e) {
       toast(errorText(e), "error");
+    } finally {
+      setSavingFolder(false);
     }
   };
 
-  const deleteFolder = async (id: string) => {
-    await api.deleteFolder(id);
-    if (page.page === "vault" && page.section.kind === "folder" && page.section.id === id) setPage({ page: "vault", section: { kind: "all" } });
+  // Deleting a folder keeps its items: they stay in the vault (All items), just no longer in a folder.
+  const deleteFolder = async (f: FolderView) => {
+    const holds = f.items > 0 ? `It holds ${f.items} item${f.items === 1 ? "" : "s"}. ` : "";
+    const text = `Delete the folder “${f.name}” on all your devices? ${holds}Items are not deleted with it: they stay in All items, outside any folder.`;
+    if (!(await ask(text, { title: "Delete folder", kind: "warning" }))) return;
+    try {
+      await api.deleteFolder(f.id);
+    } catch (e) {
+      toast(errorText(e), "error");
+      return;
+    }
+    if (page.page === "vault" && page.section.kind === "folder" && page.section.id === f.id) setPage({ page: "vault", section: { kind: "all" } });
     reloadFolders();
   };
+
+  const lock = () => api.lock().catch((e) => toast(errorText(e), "error"));
 
   const isSection = (k: Section["kind"], id?: string) => page.page === "vault" && page.section.kind === k && (!id || (page.section.kind === "folder" && page.section.id === id));
   const online = sync?.peers.filter((p) => p.visible).length ?? 0;
@@ -99,34 +116,37 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
         </button>
       </div>
       {folders.map((f) => (
-        <NavButton
-          key={f.id}
-          active={isSection("folder", f.id)}
-          onClick={() => setPage({ page: "vault", section: { kind: "folder", id: f.id } })}
-          icon={Folder}
-          label={f.name}
-          trailing={
-            <span className="flex items-center">
-              <span className="text-xs text-slate-400 group-hover:hidden">{f.items}</span>
-              <span className="hidden items-center group-hover:flex">
-                <Pencil
-                  className="size-3.5 text-slate-400 hover:text-slate-700"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setFolderEdit({ id: f.id, name: f.name });
-                  }}
-                />
-                <X
-                  className="ml-1 size-3.5 text-slate-400 hover:text-rose-600"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteFolder(f.id);
-                  }}
-                />
-              </span>
-            </span>
-          }
-        />
+        // The rename and delete buttons sit over the item count; they show on hover and when
+        // the row has the keyboard focus, so Tab reaches them after the folder itself.
+        <div key={f.id} className="group/folder relative">
+          <NavButton
+            active={isSection("folder", f.id)}
+            onClick={() => setPage({ page: "vault", section: { kind: "folder", id: f.id } })}
+            icon={Folder}
+            label={f.name}
+            trailing={<span className="w-10 shrink-0 text-right text-xs text-slate-400 group-hover/folder:invisible group-focus-within/folder:invisible">{f.items}</span>}
+          />
+          <span className="absolute top-1/2 right-2 hidden -translate-y-1/2 items-center group-hover/folder:flex group-focus-within/folder:flex">
+            <button
+              type="button"
+              aria-label={`Rename folder ${f.name}`}
+              title="Rename folder"
+              onClick={() => setFolderEdit({ id: f.id, name: f.name })}
+              className="rounded p-0.5 text-slate-400 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500 dark:hover:text-slate-200"
+            >
+              <Pencil className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label={`Delete folder ${f.name}`}
+              title="Delete folder"
+              onClick={() => deleteFolder(f)}
+              className="ml-1 rounded p-0.5 text-slate-400 hover:text-rose-600 focus-visible:outline-2 focus-visible:outline-indigo-500"
+            >
+              <X className="size-3.5" />
+            </button>
+          </span>
+        </div>
       ))}
       <div className="pt-4" />
       <NavButton active={isSection("trash")} onClick={() => setPage({ page: "vault", section: { kind: "trash" } })} icon={Trash2} label="Trash" />
@@ -156,7 +176,7 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
             </div>
             <div className="text-xs text-slate-500">Last sync {timeAgo(lastSyncMs)}</div>
           </button>
-          <IconButton label="Lock" onClick={() => api.lock()}>
+          <IconButton label="Lock" onClick={lock}>
             <Lock className="size-4" />
           </IconButton>
         </div>
@@ -166,7 +186,7 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
         <KeyRound className="size-5 text-indigo-600" />
         <span className="flex-1 font-semibold">LocalPass</span>
         <span className={`size-2 rounded-full ${online > 0 ? "bg-emerald-500" : "bg-slate-300"}`} title={syncLine} />
-        <IconButton label="Lock" onClick={() => api.lock()}>
+        <IconButton label="Lock" onClick={lock}>
           <Lock className="size-4" />
         </IconButton>
       </header>
@@ -205,7 +225,7 @@ export function Shell({ info, lastSyncMs, onInfoChange }: { info: AppInfo; lastS
             <Button variant="ghost" onClick={() => setFolderEdit(null)}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={!folderEdit?.name.trim()} onClick={saveFolder}>
+            <Button variant="primary" busy={savingFolder} disabled={!folderEdit?.name.trim()} onClick={saveFolder}>
               Save
             </Button>
           </>

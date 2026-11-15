@@ -14,10 +14,17 @@ export function StrengthMeter({ password, onScore }: { password: string; onScore
       return;
     }
     const t = setTimeout(() => {
-      api.passwordStrength(password).then((r) => {
-        setS(r);
-        onScore?.(r.score);
-      });
+      api
+        .passwordStrength(password)
+        .then((r) => {
+          setS(r);
+          onScore?.(r.score);
+        })
+        // No estimate: the meter stays empty and the password does not count as strong.
+        .catch(() => {
+          setS(null);
+          onScore?.(0);
+        });
     }, 150);
     return () => clearTimeout(t);
   }, [password, onScore]);

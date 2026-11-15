@@ -242,15 +242,26 @@ export interface BrowserClient {
   lastUsedMs: number;
 }
 
+export interface BrowserInfo {
+  name: string;
+  /** The browser is there for this user (Linux: it has been run; Windows: always true). */
+  present: boolean;
+  /** The browser finds LocalPass, and the registration points at this copy of the app. */
+  registered: boolean;
+}
+
 export interface BrowserStatus {
   available: boolean;
   /** "windows" or "linux". */
   os: string;
   extensionId: string;
   extensionFolder: string | null;
-  chrome: boolean;
-  edge: boolean;
-  firefox: boolean;
+  /** The signed Firefox add-on (.xpi) that came with this copy (a release RPM); null otherwise. */
+  firefoxAddon: string | null;
+  /** Windows: Chrome and Edge. Linux: Firefox and the Chromium browsers. */
+  browsers: BrowserInfo[];
+  /** Linux: the program of another copy of LocalPass that a browser's registration names. */
+  otherCopy: string | null;
   clients: BrowserClient[];
 }
 
@@ -288,7 +299,14 @@ export type UiEvent =
   | { type: "confirmOverwriteCancelled"; requestId: number }
   | { type: "verifyUser"; requestId: number; reason: string }
   | { type: "verifyUserCancelled"; requestId: number }
-  | { type: "windowShown" };
+  | { type: "windowShown" }
+  | ({ type: "unlockWaiting" } & UnlockWaiting);
+
+/** Which browser (broker client) waits for an unlock; `version` grows with every change. */
+export interface UnlockWaiting {
+  version: number;
+  name: string | null;
+}
 
 /** One part of the phone's set-up: "unknown" means Android does not let an app read it. */
 export type SetupState = "unsupported" | "on" | "off" | "unknown";
@@ -376,11 +394,15 @@ export const api = {
   browserInstall: () => invoke<BrowserStatus>("browser_install"),
   browserRemove: () => invoke<BrowserStatus>("browser_remove"),
   browserClientRemove: (id: string) => invoke<void>("browser_client_remove", { id }),
-  brokerRespond: (requestId: number, approve: boolean) => invoke<void>("broker_respond", { requestId, approve }),
+  /** False when the request had already ended, so the answer reached no one. */
+  brokerRespond: (requestId: number, approve: boolean) => invoke<boolean>("broker_respond", { requestId, approve }),
+  brokerUnlockWaiting: () => invoke<UnlockWaiting>("broker_unlock_waiting"),
   /** Linux: the master password for a browser's "is it you?" check. */
   brokerVerify: (requestId: number, password: string) =>
     invoke<"accepted" | "wrong" | "refused">("broker_verify", { requestId, password }),
   openExtensionFolder: () => invoke<void>("open_extension_folder"),
+  /** Shows the shipped Firefox add-on in the file manager. */
+  openFirefoxAddon: () => invoke<void>("open_firefox_addon"),
   windowsPasskeysStatus: () => invoke<WindowsPasskeysStatus>("windows_passkeys_status"),
   windowsPasskeysSetup: () => invoke<WindowsPasskeysStatus>("windows_passkeys_setup"),
   windowsPasskeysPair: () => invoke<WindowsPasskeysStatus>("windows_passkeys_pair"),

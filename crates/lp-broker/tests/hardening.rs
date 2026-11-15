@@ -732,3 +732,132 @@ async fn the_windows_provider_is_asked_before_it_replaces_a_passkey_too() {
         "denied"
     );
 }
+
+// ---- 8.2: asking whether a sign-in is saved already ----
+
+fn check(origin: &str, user: &str, password: &str) -> serde_json::Value {
+    json!({"op": "checkLogin", "origin": origin, "username": user, "password": password})
+}
+
+async fn check_status(
+    c: &mut lp_broker::client::Client<tokio::io::DuplexStream>,
+    request: &serde_json::Value,
+) -> String {
+    ok(c.request(request).await)["status"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn checking_a_login_says_new_update_or_unchanged_and_writes_nothing() {
+    let s = setup(false, false);
+    s.host
+        .engine
+        .save_item(&login_item(
+            "Example",
+            "https://example.com",
+            "Alice",
+            "pw1",
+        ))
+        .unwrap();
+    let mut c = paired_login(&s).await;
+
+    // The same login, also with the user name in another case, with spaces around it, or from
+    // another address of the same site, as `saveLogin` would see it.
+    for request in [
+        check("https://example.com", "Alice", "pw1"),
+        check("https://example.com", " alice ", "pw1"),
+        check("https://login.example.com", "ALICE", "pw1"),
+    ] {
+        assert_eq!(
+            check_status(&mut c, &request).await,
+            "unchanged",
+            "{request}"
+        );
+    }
+    // A changed password, another account, another site.
+    assert_eq!(
+        check_status(&mut c, &check("https://example.com", "alice", "pw2")).await,
+        "update"
+    );
+    assert_eq!(
+        check_status(&mut c, &check("https://example.com", "bob", "pw1")).await,
+        "new"
+    );
+    assert_eq!(
+        check_status(&mut c, &check("https://example.org", "alice", "pw1")).await,
+        "new"
+    );
+    // The input checks of `saveLogin`: no password, a page that is not https.
+    assert_eq!(
+        error_code(c.request(&check("https://example.com", "alice", "")).await),
+        "invalid"
+    );
+    assert_eq!(
+        error_code(
+            c.request(&check("http://example.com", "alice", "pw1"))
+                .await
+        ),
+        "invalid"
+    );
+
+    // Nothing was asked and nothing was saved.
+    assert!(s.host.overwrites.lock().unwrap().is_empty());
+    assert_eq!(s.host.verifies.load(Ordering::SeqCst), 0);
+    let items = s.host.engine.list_items(&ItemQuery::default()).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        s.host.engine.get_item(&items[0].id).unwrap().password,
+        "pw1"
+    );
+}
+
+#[tokio::test]
+async fn checking_a_login_on_a_locked_vault_never_asks_to_unlock() {
+    let s = setup(false, false);
+    s.host
+        .engine
+        .save_item(&login_item(
+            "Example",
+            "https://example.com",
+            "alice",
+            "pw1",
+        ))
+        .unwrap();
+    let mut c = paired_login(&s).await;
+    s.host.engine.lock();
+    assert_eq!(
+        error_code(
+            c.request(&check("https://example.com", "alice", "pw1"))
+                .await
+        ),
+        "locked"
+    );
+    assert_eq!(s.host.unlocks.load(Ordering::SeqCst), 0, "no unlock prompt");
+    assert_eq!(s.host.verifies.load(Ordering::SeqCst), 0);
+    assert_eq!(s.host.engine.status(), VaultStatus::Locked);
+}
+
+#[tokio::test]
+async fn the_windows_provider_may_not_check_logins() {
+    let s = setup(false, false);
+    s.host
+        .engine
+        .save_item(&login_item(
+            "Example",
+            "https://example.com",
+            "alice",
+            "pw1",
+        ))
+        .unwrap();
+    let (_first, paired) = pair(&s, ClientKind::Provider).await;
+    let mut c = login(&s, &paired.credentials).await;
+    assert_eq!(
+        error_code(
+            c.request(&check("https://example.com", "alice", "pw1"))
+                .await
+        ),
+        "forbidden"
+    );
+}

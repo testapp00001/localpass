@@ -77,7 +77,9 @@ function PasswordFields({
   confirm,
   setConfirm,
   onScore,
+  autoFocus = true,
 }: {
+  autoFocus?: boolean;
   password: string;
   setPassword: (v: string) => void;
   confirm: string;
@@ -91,7 +93,7 @@ function PasswordFields({
           label="Master password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          autoFocus
+          autoFocus={autoFocus}
           hint="A long passphrase works best, e.g. four random words."
         />
         <StrengthMeter password={password} onScore={onScore} />
@@ -275,7 +277,8 @@ function JoinVault({ info, onBack, onDone }: { info: AppInfo; onBack: () => void
           </button>
         )}
         <TextInput label="Name of this device" value={name} onChange={(e) => setName(e.target.value)} />
-        <PasswordFields password={password} setPassword={setPassword} confirm={confirm} setConfirm={setConfirm} onScore={setScore} />
+        {/* The pairing code at the top has the focus, not the master password further down. */}
+        <PasswordFields password={password} setPassword={setPassword} confirm={confirm} setConfirm={setConfirm} onScore={setScore} autoFocus={false} />
         <p className="text-xs text-slate-500 dark:text-slate-400">Each device has its own master password. Using the same one everywhere is easiest.</p>
         {info.platform !== "android" && <AutostartToggle checked={autostart} onChange={setAutostart} />}
         <ErrorText>{error}</ErrorText>

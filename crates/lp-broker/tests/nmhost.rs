@@ -37,7 +37,7 @@ impl Host for SimpleHost {
     fn approve_pairing<'a>(&'a self, _prompt: &'a PairingPrompt) -> BoxFuture<'a, bool> {
         Box::pin(async { true })
     }
-    fn unlock<'a>(&'a self) -> BoxFuture<'a, bool> {
+    fn unlock<'a>(&'a self, _client: &'a str) -> BoxFuture<'a, bool> {
         Box::pin(async { false })
     }
     fn verify_user<'a>(&'a self, _reason: &'a str) -> BoxFuture<'a, bool> {

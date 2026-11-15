@@ -154,11 +154,131 @@ impl Approvals {
     }
 }
 
+/// The kinds of prompt a broker client can raise (for the prompt log; Linux restores the window
+/// after them, see `prompt_window.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub enum PromptKind {
+    Unlock,
+    Verify,
+    Overwrite,
+    Pairing,
+}
+
+impl PromptKind {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn name(self) -> &'static str {
+        match self {
+            PromptKind::Unlock => "unlock",
+            PromptKind::Verify => "verify",
+            PromptKind::Overwrite => "overwrite",
+            PromptKind::Pairing => "pairing",
+        }
+    }
+}
+
+/// The window around one prompt: on Linux the guard of `prompt_window.rs`, which puts the window
+/// back when the last prompt ends; elsewhere it only shows the window, as before.
+#[cfg(target_os = "linux")]
+type PromptWindow<'a> = crate::prompt_window::Prompt<'a, crate::prompt_window::TauriWindow>;
+
+#[cfg(not(target_os = "linux"))]
+struct PromptWindow<'a>(&'a AppHandle);
+
+#[cfg(not(target_os = "linux"))]
+impl PromptWindow<'_> {
+    async fn raise(&self) {
+        crate::show_main(self.0);
+    }
+
+    fn ended(&mut self, _outcome: &'static str) {}
+}
+
+/// Which broker client is waiting for an unlock, for the unlock screen: "Firefox extension is
+/// waiting". The newest waiting one is shown. `version` grows with every change, so the screen
+/// can tell a stale answer (its own question on mount) from a newer event.
+#[derive(Default)]
+pub struct UnlockWaiting {
+    state: Mutex<WaitingState>,
+}
+
+#[derive(Default)]
+struct WaitingState {
+    version: u64,
+    next: u64,
+    entries: Vec<(u64, String)>,
+}
+
+/// What the unlock screen shows: the name of the client waiting, if any.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitingView {
+    pub version: u64,
+    pub name: Option<String>,
+}
+
+impl WaitingState {
+    fn view(&self) -> WaitingView {
+        WaitingView {
+            version: self.version,
+            name: self.entries.last().map(|(_, name)| name.clone()),
+        }
+    }
+}
+
+impl UnlockWaiting {
+    fn add(&self, name: &str) -> (u64, WaitingView) {
+        let mut state = self.state.lock().expect("unlock waiting");
+        state.next += 1;
+        state.version += 1;
+        let token = state.next;
+        state.entries.push((token, name.to_string()));
+        (token, state.view())
+    }
+
+    fn remove(&self, token: u64) -> WaitingView {
+        let mut state = self.state.lock().expect("unlock waiting");
+        state.entries.retain(|(t, _)| *t != token);
+        state.version += 1;
+        state.view()
+    }
+
+    pub fn view(&self) -> WaitingView {
+        self.state.lock().expect("unlock waiting").view()
+    }
+}
+
+/// A client's unlock that the screen is told about; dropped (unlocked, refused, timed out, or the
+/// client left) it is taken off the screen again.
+struct Waiting<'a> {
+    host: &'a AppHost,
+    token: u64,
+}
+
+impl<'a> Waiting<'a> {
+    fn new(host: &'a AppHost, name: &str) -> Self {
+        let (token, view) = host.waiting.add(name);
+        host.emit_waiting(view);
+        Self { host, token }
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let view = self.host.waiting.remove(self.token);
+        self.host.emit_waiting(view);
+    }
+}
+
 pub struct AppHost {
     app: AppHandle,
     engine: Engine,
     clients: ClientFile,
     approvals: Approvals,
+    waiting: UnlockWaiting,
+    /// Puts the window back after the prompts a browser raised (Linux).
+    #[cfg(target_os = "linux")]
+    windows: crate::prompt_window::PromptWindows<crate::prompt_window::TauriWindow>,
     /// Open master-password checks (request id -> wrong tries so far).
     #[cfg(not(windows))]
     verifying: Mutex<HashMap<u64, u32>>,
@@ -188,11 +308,22 @@ impl AppHost {
         data_dir: &std::path::Path,
         protector: Arc<dyn LocalProtect>,
     ) -> Self {
+        #[cfg(target_os = "linux")]
+        let windows = {
+            crate::prompt_window::log_display_backend();
+            crate::prompt_window::PromptWindows::new(
+                crate::prompt_window::TauriWindow(app.clone()),
+                crate::prompt_window::raise_mode(),
+            )
+        };
         Self {
             app,
             engine,
             clients: ClientFile::load(data_dir.join("broker-clients.bin"), protector),
             approvals: Approvals::default(),
+            waiting: UnlockWaiting::default(),
+            #[cfg(target_os = "linux")]
+            windows,
             #[cfg(not(windows))]
             verifying: Mutex::new(HashMap::new()),
         }
@@ -259,6 +390,47 @@ impl AppHost {
     pub fn clients(&self) -> &ClientFile {
         &self.clients
     }
+
+    /// Who is waiting for an unlock now (the unlock screen asks when it appears).
+    pub fn unlock_waiting(&self) -> WaitingView {
+        self.waiting.view()
+    }
+
+    fn emit_waiting(&self, view: WaitingView) {
+        let _ = self.app.emit(
+            "lp-event",
+            crate::UiEvent::UnlockWaiting {
+                version: view.version,
+                name: view.name,
+            },
+        );
+    }
+
+    /// The window for a prompt a broker client raised. Hold it until the prompt has ended.
+    fn prompt_window(&self, kind: PromptKind) -> PromptWindow<'_> {
+        #[cfg(target_os = "linux")]
+        {
+            self.windows.begin(kind)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = kind;
+            PromptWindow(&self.app)
+        }
+    }
+
+    /// The user opened the window themselves (tray icon, starting the app again): it stays open
+    /// when the prompts end. Safe on the main thread.
+    #[cfg(target_os = "linux")]
+    pub fn window_opened_by_user(&self) {
+        self.windows.user_opened();
+    }
+
+    /// The main window's focus changed (logged while a prompt is open). Safe on the main thread.
+    #[cfg(target_os = "linux")]
+    pub fn window_focus_changed(&self, focused: bool) {
+        self.windows.focus_changed(focused);
+    }
 }
 
 impl Host for AppHost {
@@ -279,8 +451,12 @@ impl Host for AppHost {
 
     fn approve_pairing<'a>(&'a self, prompt: &'a PairingPrompt) -> BoxFuture<'a, bool> {
         Box::pin(async move {
+            // Taken before the unlock, so the window is put back only after the dialog, not
+            // between the unlock and the dialog.
+            let mut window = self.prompt_window(PromptKind::Pairing);
             // Connecting a browser needs the vault unlocked, so a passer-by can't approve one.
-            if self.engine.status() != VaultStatus::Unlocked && !self.unlock().await {
+            if self.engine.status() != VaultStatus::Unlocked && !self.unlock(&prompt.name).await {
+                window.ended("not unlocked");
                 return false;
             }
             let (request_id, answer) = self.approvals.open();
@@ -301,15 +477,17 @@ impl Host for AppHost {
                     kind: prompt.kind,
                 },
             );
-            crate::show_main(&self.app);
+            window.raise().await;
             let approved = answer.await.unwrap_or(false);
             open.answered = true;
+            window.ended(if approved { "approved" } else { "refused" });
             approved
         })
     }
 
     fn confirm_overwrite<'a>(&'a self, prompt: &'a OverwritePrompt) -> BoxFuture<'a, bool> {
         Box::pin(async move {
+            let mut window = self.prompt_window(PromptKind::Overwrite);
             let (request_id, answer) = self.approvals.open();
             // If the client leaves while the dialog is open the broker drops this future, and the
             // guard closes the dialog.
@@ -333,34 +511,40 @@ impl Host for AppHost {
             );
             // Same steps as the pairing dialog: the user is in the browser, so the window
             // has to come to the front for them to see the question.
-            crate::show_main(&self.app);
+            window.raise().await;
             let agreed = answer.await.unwrap_or(false);
             open.answered = true;
+            window.ended(if agreed { "agreed" } else { "refused" });
             agreed
         })
     }
 
-    fn unlock<'a>(&'a self) -> BoxFuture<'a, bool> {
+    fn unlock<'a>(&'a self, client: &'a str) -> BoxFuture<'a, bool> {
         Box::pin(async move {
             if self.engine.status() == VaultStatus::Unlocked {
                 return true;
             }
+            let mut window = self.prompt_window(PromptKind::Unlock);
             if self.engine.quick_unlock_enabled()
                 && crate::commands::quick_unlock(&self.engine, true)
                     .await
                     .is_ok()
             {
+                window.ended("quick unlock");
                 return true;
             }
-            // Show the unlock screen and wait for the user to use it.
-            crate::show_main(&self.app);
+            // Show the unlock screen, saying who is waiting, and wait for the user to use it.
+            let _waiting = Waiting::new(self, client);
+            window.raise().await;
             let deadline = Instant::now() + Duration::from_secs(110);
             while Instant::now() < deadline {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 if self.engine.status() == VaultStatus::Unlocked {
+                    window.ended("unlocked");
                     return true;
                 }
             }
+            window.ended("timed out");
             false
         })
     }
@@ -404,6 +588,8 @@ impl Host for AppHost {
                     verifying.insert(opened.0, 0);
                     opened
                 };
+                // Before the dialog's guard, so it is dropped after it: the dialog closes first.
+                let mut window = self.prompt_window(PromptKind::Verify);
                 let mut open = OpenApproval {
                     host: self,
                     request_id,
@@ -417,13 +603,18 @@ impl Host for AppHost {
                         reason: reason.to_string(),
                     },
                 );
-                crate::show_main(&self.app);
+                window.raise().await;
                 // The user has two minutes, like the unlock screen.
                 let verified = tokio::time::timeout(Duration::from_secs(110), answer)
                     .await
                     .map(|a| a.unwrap_or(false))
                     .unwrap_or(false);
                 open.answered = verified;
+                window.ended(if verified {
+                    "verified"
+                } else {
+                    "refused or timed out"
+                });
                 verified
             }
         })
@@ -552,6 +743,33 @@ mod tests {
             created_ms: 1,
             last_used_ms: 1,
         }
+    }
+
+    #[test]
+    fn the_unlock_screen_names_the_newest_waiting_client_until_it_is_done() {
+        let w = UnlockWaiting::default();
+        assert_eq!(
+            w.view(),
+            WaitingView {
+                version: 0,
+                name: None
+            }
+        );
+        let (firefox, v1) = w.add("Firefox extension");
+        assert_eq!(v1.name.as_deref(), Some("Firefox extension"));
+        let (chrome, v2) = w.add("Chrome extension");
+        assert_eq!(v2.name.as_deref(), Some("Chrome extension"));
+        assert!(v2.version > v1.version);
+        // The newer one ends first: the older one is named again.
+        let v3 = w.remove(chrome);
+        assert_eq!(v3.name.as_deref(), Some("Firefox extension"));
+        assert!(v3.version > v2.version);
+        let v4 = w.remove(firefox);
+        assert_eq!(v4.name, None);
+        assert!(v4.version > v3.version);
+        assert_eq!(w.view(), v4);
+        // Removing twice changes nothing but the version.
+        assert_eq!(w.remove(firefox).name, None);
     }
 
     /// RA-5: pairing after a failed read must not destroy the unreadable file.

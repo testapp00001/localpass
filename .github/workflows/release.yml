@@ -66,7 +66,8 @@ jobs:
 
   linux:
     name: Fedora RPM
-    needs: check
+    # Waits for the signed Firefox add-on, which the package carries when there is one.
+    needs: [check, firefox]
     runs-on: ubuntu-latest
     # Built on the Fedora the package is for, so it links Fedora's WebKitGTK and OpenSSL.
     container: fedora:44
@@ -88,13 +89,43 @@ jobs:
         working-directory: extension
       - run: bun install --frozen-lockfile
         working-directory: app
+      # The signed add-on goes into the package as /usr/lib/localpass/firefox/localpass-firefox.xpi (Settings > Browser
+      # extension shows it), beside the Chrome folder `extension/` so "Load unpacked" does not pick it up. tauri.linux.conf.json
+      # cannot name it (a missing resource fails every build without it), so it is added here with --config.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.firefox.outputs.signed == 'true'
+        with:
+          name: firefox
+          path: firefox-addon
+      - name: Add the signed Firefox add-on to the package
+        if: needs.firefox.outputs.signed == 'true'
+        run: |
+          xpi="$GITHUB_WORKSPACE/firefox-addon/localpass-firefox-${GITHUB_REF_NAME#v}.xpi"
+          test -f "$xpi" || { echo "::error::the signed Firefox add-on was not downloaded"; exit 1; }
+          printf '{"bundle":{"resources":{"%s":"firefox/localpass-firefox.xpi"}}}\n' "$xpi" > "$RUNNER_TEMP/firefox-addon.json"
+          cat "$RUNNER_TEMP/firefox-addon.json"
       # beforeBuildCommand runs `build:all` (web app and extension; the provider step skips itself on Linux).
-      - run: bun run tauri build
+      - name: Build
         working-directory: app
+        shell: bash
+        run: |
+          config=()
+          if [ -f "$RUNNER_TEMP/firefox-addon.json" ]; then config=(--config "$RUNNER_TEMP/firefox-addon.json"); fi
+          bun run tauri build "${config[@]}"
       - name: Collect files
+        shell: bash
+        env:
+          SIGNED_ADDON: ${{ needs.firefox.outputs.signed }}
         run: |
           mkdir out
           cp target/release/bundle/rpm/*.rpm out/
+          rpm -qlp out/*.rpm | tee "$RUNNER_TEMP/rpm-files.txt"
+          if [ "$SIGNED_ADDON" = "true" ]; then
+            grep -qx /usr/lib/localpass/firefox/localpass-firefox.xpi "$RUNNER_TEMP/rpm-files.txt" \
+              || { echo "::error::the package lacks the signed Firefox add-on"; exit 1; }
+          else
+            echo "::warning::no signed Firefox add-on: the package points at the release page instead"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux
@@ -107,6 +138,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      # "true" when Mozilla signed the add-on (the `linux` job then puts it into the RPM).
+      signed: ${{ steps.sign.outputs.signed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -123,6 +157,7 @@ jobs:
       # Mozilla signs the add-on ("unlisted": it is not published on addons.mozilla.org, the .xpi is installed by hand).
       # Without the repository secrets AMO_JWT_ISSUER / AMO_JWT_SECRET the release goes out without an add-on.
       - name: Sign with Mozilla
+        id: sign
         working-directory: extension
         env:
           WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
@@ -136,6 +171,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           bun x web-ext sign --channel unlisted --source-dir dist-firefox --artifacts-dir "$RUNNER_TEMP/signed" --no-input --approval-timeout 1200000
           cp "$RUNNER_TEMP"/signed/*.xpi "../out/localpass-firefox-${version}.xpi"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: firefox
@@ -251,7 +287,7 @@ jobs:
           | File | For |
           |---|---|
           | `LocalPass_<version>_x64-setup.exe` | Windows 10/11 (per-user install, not code-signed: SmartScreen says "More info → Run anyway") |
-          | `localpass-<version>-1.x86_64.rpm` | Fedora 44 (`sudo dnf install ./localpass-<version>-1.x86_64.rpm`; not signed, check the SHA-256 line) |
+          | `localpass-<version>-1.x86_64.rpm` | Fedora 44 (`sudo dnf install ./localpass-<version>-1.x86_64.rpm`; not signed, check the SHA-256 line; includes the signed Firefox add-on when this release has one, see Settings > Browser extension) |
           | `localpass-<version>-universal-release.apk` | Android 7+ (64-bit ARM phones and x86_64 emulators) |
           | `localpass-extension-<version>.zip` | Chrome / Edge extension (Developer mode, "Load unpacked") |
           | `localpass-firefox-<version>.xpi` | Firefox extension, signed by Mozilla (about:addons → gear → Install Add-on From File) |

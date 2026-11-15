@@ -138,6 +138,7 @@ export function ItemEditor({
                   <TextInput
                     value={u}
                     placeholder="https://"
+                    aria-label={urls.length > 1 ? `Website ${i + 1}` : "Website"}
                     onChange={(e) => set({ urls: urls.map((x, j) => (j === i ? e.target.value : x)) })}
                   />
                   {urls.length > 1 && (
@@ -208,12 +209,14 @@ export function ItemEditor({
               <TextInput
                 value={f.label}
                 placeholder="Label"
+                aria-label="Field label"
                 onChange={(e) => set({ custom: item.custom.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })}
                 className="sm:w-40"
               />
               <TextInput
                 value={f.value}
                 placeholder="Value"
+                aria-label={f.label ? `${f.label} value` : "Field value"}
                 type={f.hidden ? "password" : "text"}
                 onChange={(e) => set({ custom: item.custom.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)) })}
               />

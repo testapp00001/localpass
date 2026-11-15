@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Lock } from "lucide-react";
-import { api } from "../lib/api";
+import { api, errorText } from "../lib/api";
 import { Button, ErrorText, Modal, PasswordInput } from "./ui";
 
 /**
@@ -39,7 +39,7 @@ export function VerifyDialog({ request, onClose }: { request: { requestId: numbe
         onClose();
       }
     } catch (e) {
-      setError(String(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }
@@ -74,7 +74,7 @@ export function VerifyDialog({ request, onClose }: { request: { requestId: numbe
           <p className="text-center">
             Your browser asks for your vault: <b>{request.reason}</b>
           </p>
-          <PasswordInput placeholder="Master password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+          <PasswordInput placeholder="Master password" aria-label="Master password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
           {error && <ErrorText>{error}</ErrorText>}
           <p className="text-center text-sm text-slate-500">Confirm only if you just did this yourself.</p>
         </form>

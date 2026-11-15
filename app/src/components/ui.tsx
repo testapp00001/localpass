@@ -1,5 +1,6 @@
-import { useEffect, useId, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 import { Eye, EyeOff, Loader2, X } from "lucide-react";
+import { createModalStack, wrapFocus } from "../lib/modalStack";
 
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 
@@ -216,17 +217,59 @@ export function Badge({ children, tone = "slate" }: { children: ReactNode; tone?
   return <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${tones[tone]}`}>{children}</span>;
 }
 
+// Open dialogs. They share one z-index, so the later one in the document is drawn on top; Esc
+// closes only that one and Tab stays inside it.
+type OpenModal = { close: () => void; box: () => HTMLElement | null };
+const modals = createModalStack<OpenModal>((a, b) => {
+  const ea = a.box();
+  const eb = b.box();
+  if (!ea || !eb) return undefined;
+  return (eb.compareDocumentPosition(ea) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+});
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const onModalKey = (e: KeyboardEvent) => {
+  const top = modals.top();
+  if (!top) return;
+  if (e.key === "Escape") {
+    // Capture phase: no other Esc handler (e.g. the vault's "stop selecting") also acts.
+    e.preventDefault();
+    e.stopPropagation();
+    top.close();
+  } else if (e.key === "Tab") {
+    const box = top.box();
+    if (!box) return;
+    const items = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE));
+    const next = wrapFocus(items.length, items.indexOf(document.activeElement as HTMLElement), e.shiftKey);
+    if (next !== undefined) {
+      e.preventDefault();
+      items[next].focus();
+    }
+  }
+};
+function openModal(entry: OpenModal): () => void {
+  if (modals.size() === 0) window.addEventListener("keydown", onModalKey, true);
+  const remove = modals.open(entry);
+  return () => {
+    remove();
+    if (modals.size() === 0) window.removeEventListener("keydown", onModalKey, true);
+  };
+}
+
 export function Modal({ open, onClose, title, children, footer, wide = false }: { open: boolean; onClose: () => void; title: string; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+  const closeRef = useRef(onClose);
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+    return openModal({ close: () => closeRef.current(), box: () => boxRef.current });
+  }, [open]);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-slate-950/50 p-0 backdrop-blur-sm sm:items-center sm:p-4" onMouseDown={onClose}>
       <div
+        ref={boxRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}

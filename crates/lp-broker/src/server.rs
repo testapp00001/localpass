@@ -116,7 +116,10 @@ pub trait Host: Send + Sync + 'static {
     /// Shows the pairing request and returns whether the user approved it.
     fn approve_pairing<'a>(&'a self, prompt: &'a PairingPrompt) -> BoxFuture<'a, bool>;
     /// Unlocks the vault (quick unlock, or by showing the unlock screen). True once unlocked.
-    fn unlock<'a>(&'a self) -> BoxFuture<'a, bool>;
+    /// `client` names who is waiting for it, for the unlock screen to say so: the paired client's
+    /// name, cleaned like site text (no control or invisible characters, at most 60 characters).
+    /// Show it only as text.
+    fn unlock<'a>(&'a self, client: &'a str) -> BoxFuture<'a, bool>;
     /// Checks that the user is present and verified (Windows Hello). True if they were.
     /// `reason` says what for, for example "Sign in to example.com" (control characters removed,
     /// site-supplied text cut to 60 characters); show it where the platform allows.
@@ -216,20 +219,38 @@ fn display_text(text: &str) -> String {
         .to_string()
 }
 
-/// Characters with no width, or that reorder or hide the text around them: soft hyphen, Arabic letter
-/// mark, Mongolian vowel separator, zero-width and direction marks, bidi embeddings and isolates,
-/// invisible operators, the byte order mark and the interlinear annotation marks.
+/// Characters with no width, or that reorder or hide the text around them: soft hyphen, the
+/// combining grapheme joiner, Arabic letter mark, Mongolian vowel separator, zero-width and direction
+/// marks, line and paragraph separators, bidi embeddings and isolates, invisible operators, the byte
+/// order mark, the interlinear annotation marks, the Hangul fillers (blank letters), the tag
+/// characters, and every other format (Cf) character of Unicode 17 (number signs and marks that
+/// join the text after them, Egyptian hieroglyph and shorthand format controls, musical beams).
 fn is_invisible(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'
+            | '\u{034F}'
+            | '\u{0600}'..='\u{0605}'
             | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{0890}'..='\u{0891}'
+            | '\u{08E2}'
+            | '\u{115F}'..='\u{1160}'
             | '\u{180E}'
             | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
+            | '\u{2028}'..='\u{202E}'
             | '\u{2060}'..='\u{206F}'
+            | '\u{3164}'
             | '\u{FEFF}'
+            | '\u{FFA0}'
             | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{13430}'..='\u{1343F}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E007F}'
     )
 }
 
@@ -562,9 +583,11 @@ impl<H: Host> Broker<H> {
             .await;
             return None;
         };
-        let name: String = name.chars().filter(|c| !c.is_control()).take(60).collect();
+        // Shown in the app's dialogs and on its unlock screen: no control characters, none of the
+        // invisible ones that reorder the text around them, at most 60 characters.
+        let name = display_text(&name);
         let prompt = PairingPrompt {
-            name: if name.trim().is_empty() {
+            name: if name.is_empty() {
                 "Unnamed client".into()
             } else {
                 name
@@ -659,7 +682,13 @@ impl<H: Host> Broker<H> {
     /// unlock with Windows Hello, or the master password), which the passkey requests count as
     /// their user verification instead of asking a second time. It is never carried over to a
     /// later request.
-    async fn ensure_unlocked(&self, interactive: bool) -> Result<bool, BrokerError> {
+    ///
+    /// `client` is the one asking; the unlock screen names it.
+    async fn ensure_unlocked(
+        &self,
+        interactive: bool,
+        client: &ClientRecord,
+    ) -> Result<bool, BrokerError> {
         match self.host.engine().status() {
             VaultStatus::Unlocked => Ok(false),
             VaultStatus::NoVault => Err(BrokerError::new(
@@ -682,7 +711,8 @@ impl<H: Host> Broker<H> {
                     // said no (or ignored it), so a queue of requests does not ask again.
                     return Err(BrokerError::new("locked", "The vault is locked"));
                 }
-                let unlocked = timeout(USER_ACTION, self.host.unlock())
+                let waiting = display_text(&client.name);
+                let unlocked = timeout(USER_ACTION, self.host.unlock(&waiting))
                     .await
                     .unwrap_or(false)
                     && self.host.engine().status() == VaultStatus::Unlocked;
@@ -777,7 +807,7 @@ impl<H: Host> Broker<H> {
             Request::Status | Request::Lock | Request::GeneratePassword { .. }
         ) {
             let may_prompt = request.is_interactive() || matches!(request, Request::Unlock);
-            just_unlocked = self.ensure_unlocked(may_prompt).await?;
+            just_unlocked = self.ensure_unlocked(may_prompt, client).await?;
             // The user may have removed this client while the prompt was open.
             self.check_paired(client)?;
         }
@@ -887,6 +917,23 @@ impl<H: Host> Broker<H> {
                     }
                 };
                 to_value(&outcome)
+            }
+            Request::CheckLogin {
+                origin,
+                username,
+                password,
+            } => {
+                // The same planning step `SaveLogin` takes, with the same checks on its input (a
+                // well-formed https origin, a password that is not empty), and nothing written.
+                let plan = self
+                    .engine(move |e| e.plan_save_login(&origin, &username, &password))
+                    .await?;
+                let status = match plan {
+                    SavePlan::Create => "new",
+                    SavePlan::Update(_) => "update",
+                    SavePlan::Unchanged { .. } => "unchanged",
+                };
+                to_value(&json!({ "status": status }))
             }
             Request::GeneratePassword { options } => {
                 let options = options.unwrap_or_default();
@@ -1020,5 +1067,46 @@ mod tests {
         );
         assert_eq!(display_text("\u{061C}\u{200F}x\u{00AD}y"), "xy");
         assert_eq!(display_text("Café 日本語"), "Café 日本語");
+    }
+
+    #[test]
+    fn display_text_drops_tags_separators_fillers_and_other_format_characters() {
+        // Tag characters spell hidden text ("hi" as tags, then the cancel tag).
+        assert_eq!(display_text("a\u{E0001}\u{E0068}\u{E0069}\u{E007F}b"), "ab");
+        assert_eq!(display_text("a\u{E0000}b\u{E0020}c"), "abc");
+        // Line and paragraph separators.
+        assert_eq!(display_text("a\u{2028}b\u{2029}c"), "abc");
+        // Hangul fillers (blank letters) and the combining grapheme joiner.
+        assert_eq!(
+            display_text("\u{115F}\u{1160}a\u{3164}b\u{FFA0}c\u{034F}d"),
+            "abcd"
+        );
+        // A name made only of blank letters shows as nothing, not as a blank name.
+        assert_eq!(display_text("\u{3164}\u{3164}\u{3164}"), "");
+        // The other format characters.
+        for c in [
+            '\u{0600}',
+            '\u{0605}',
+            '\u{06DD}',
+            '\u{070F}',
+            '\u{0890}',
+            '\u{0891}',
+            '\u{08E2}',
+            '\u{110BD}',
+            '\u{110CD}',
+            '\u{13430}',
+            '\u{1343F}',
+            '\u{1BCA0}',
+            '\u{1BCA3}',
+            '\u{1D173}',
+            '\u{1D17A}',
+        ] {
+            assert_eq!(display_text(&format!("x{c}y")), "xy", "{:X}", c as u32);
+        }
+        // Their neighbours are kept.
+        assert_eq!(
+            display_text("\u{0606}\u{1161}\u{3165}\u{E0080}"),
+            "\u{0606}\u{1161}\u{3165}\u{E0080}"
+        );
     }
 }

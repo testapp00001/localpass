@@ -1,18 +1,16 @@
-// The content script: finds login forms, offers LocalPass logins next to them, fills on request,
-// and notices sign-ins so they can be saved. It never sees secrets until the user picks a login,
-// and the service worker decides which site a request is for.
+// The content script: finds login forms, puts the LocalPass badge in their fields, fills what the user
+// chose in LocalPass's own panel, and notices sign-ins so they can be saved. It never sees a secret
+// until the user picks a login in the panel (the background hands it over as the reply to this
+// script's own `decide` request), never learns the titles or user names of saved logins, and the
+// service worker decides which site a request is for.
 
-import type { FindLoginsReply, PendingSave, ToContent } from "../shared/messages";
-import type { LoginFill, LoginMatch, SaveOutcome } from "../shared/protocol";
+import type { ChooseOutcome, DecisionRequest, PendingSaveRef, SiteStatus, ToContent } from "../shared/messages";
+import type { LoginFill } from "../shared/protocol";
 import { MAX_CAPTURE_CHARS } from "../shared/limits";
-import { saveMessage } from "../shared/shown";
-import { ask } from "./ask";
+import { ask, askDecision } from "./ask";
 import { type LoginForm, findLoginForms, setValue } from "./detect";
-import { conditionalCandidates, conditionalPending, installPasskeyBridge, passkeyRow } from "./passkeys";
-import { type MenuRow, hideBadge, hideBar, hideMenu, showBadge, showMenu, showSaveBar } from "./ui";
-
-/** Set by `bun run build --firefox`: choosing and confirming use extension-owned UI. */
-declare const __FIREFOX__: boolean;
+import { conditionalPending, conditionalRequest, installPasskeyBridge, resolveConditional } from "./passkeys";
+import { hideBadge, showBadge } from "./ui";
 
 // Listen for the page's passkey requests from the very start (this script runs at document_start).
 installPasskeyBridge();
@@ -48,17 +46,32 @@ function bestForm(): LoginForm | undefined {
   return formOf(document.activeElement) ?? forms.find((f) => f.password) ?? forms[0];
 }
 
-// ---- the badge and menu ----
+// ---- the badge and the picker ----
 
-/** Firefox: the badge opens the protected picker; its answer fills this particular form. */
+/**
+ * The badge asks for LocalPass's picker (the toolbar panel); the user chooses there, and the outcome comes
+ * back as the reply: a login fills this particular form, a generated password its new-password boxes, and a
+ * passkey answers the page's pending passkey request (Chrome, conditional mediation).
+ */
 async function chooseInPicker(form: LoginForm): Promise<void> {
   const ref = crypto.randomUUID();
   const origin = location.origin;
   const withdraw = () => void ask({ kind: "decideCancel", ref }).catch(() => {});
   window.addEventListener("pagehide", withdraw, { once: true });
+  // Hints the page could fake: the worst outcome is a "Generate" row or the page's own passkey request listed.
+  const request: DecisionRequest = { decision: "chooseLogin" };
+  if (form.isNewPassword) request.newPassword = true;
+  const pendingPasskey = conditionalRequest();
+  if (pendingPasskey) request.passkeys = pendingPasskey.params;
   try {
-    const fill = await ask<LoginFill>({ kind: "decide", ref, request: { decision: "chooseLogin" } });
-    if (location.origin === origin && form.root.isConnected) applyFill(form, fill);
+    const outcome = await askDecision<ChooseOutcome>(ref, request);
+    if ("passkey" in outcome) {
+      if (pendingPasskey) resolveConditional(pendingPasskey.id, outcome.passkey);
+      return;
+    }
+    if (location.origin !== origin || !form.root.isConnected) return;
+    if ("fill" in outcome) applyFill(form, outcome.fill);
+    else if ("generated" in outcome) for (const box of [form.password, ...form.extraPasswords]) if (box) setValue(box, outcome.generated);
   } catch {
     // Cancelled, or unavailable. The normal toolbar popup remains available.
   } finally {
@@ -66,84 +79,13 @@ async function chooseInPicker(form: LoginForm): Promise<void> {
   }
 }
 
-async function openMenu(field: HTMLInputElement, form: LoginForm): Promise<void> {
-  let reply: FindLoginsReply;
-  try {
-    reply = await ask<FindLoginsReply>({ kind: "findLogins", interactive: true });
-  } catch {
-    reply = { status: "error", logins: [] };
-  }
-  const reopen = () => void openMenu(field, form);
-  const title = "LocalPass";
-  const note = (message: string) => showMenu(field, { title, message, rows: [] });
-  switch (reply.status) {
-    case "ok":
-      break;
-    case "locked":
-      return showMenu(field, {
-        title,
-        message: "Your vault is locked.",
-        rows: [
-          {
-            label: "Unlock LocalPass",
-            onSelect: () =>
-              void ask({ kind: "unlock" })
-                .then(reopen)
-                .catch(() => note("LocalPass was not unlocked.")),
-          },
-        ],
-      });
-    case "noVault":
-      return note("Create or join a vault in the LocalPass app first.");
-    case "unpaired":
-    case "denied":
-      return note("Click the LocalPass icon in the browser toolbar and choose Connect.");
-    case "untrusted":
-      return note("Something answered that could not prove it is LocalPass. Nothing was shared.");
-    case "tooMany":
-      return note("LocalPass is busy right now. Try again in a moment.");
-    case "tooLarge":
-      return note("LocalPass could not send that answer (too much data).");
-    default:
-      return note("Can't reach LocalPass. Check that the app is running, then try again.");
-  }
-
-  const rows: MenuRow[] = reply.logins.map((login: LoginMatch) => ({
-    label: login.title,
-    sub: login.username || "(no username)",
-    onSelect: () =>
-      void ask<LoginFill>({ kind: "fill", itemId: login.id })
-        .then((fill) => applyFill(form, fill))
-        .catch((e: unknown) => note(e instanceof Error ? e.message : "Could not fill")),
-  }));
-  if (form.isNewPassword) {
-    rows.push({
-      label: "Generate a strong password",
-      sub: "Fills the new password boxes",
-      onSelect: () =>
-        void ask<{ password: string }>({ kind: "generate" })
-          .then(({ password }) => {
-            for (const box of [form.password, ...form.extraPasswords]) if (box) setValue(box, password);
-          })
-          .catch(() => {}),
-    });
-  }
-  // A page waiting for a passkey sign-in (conditional mediation) gets its passkeys listed here too.
-  if (conditionalPending()) {
-    for (const candidate of await conditionalCandidates()) rows.unshift(passkeyRow(candidate));
-  }
-  if (!rows.length) return note("No saved logins for this site yet.");
-  showMenu(field, { title, rows });
-}
-
 function onFocus(field: HTMLInputElement, form: LoginForm): void {
-  hideMenu();
-  void ask<FindLoginsReply>({ kind: "findLogins", interactive: false })
+  void ask<SiteStatus>({ kind: "findLogins", interactive: false })
     .then((reply) => {
       if (document.activeElement !== field) return;
-      const useful = reply.status === "ok" && (reply.logins.length > 0 || form.isNewPassword || conditionalPending());
-      // Muted when LocalPass can't help yet (locked or not connected); the click explains why.
-      showBadge(field, !useful, () => void (__FIREFOX__ ? chooseInPicker(form) : openMenu(field, form)));
+      const useful = reply.status === "ok" && (reply.hasLogins || form.isNewPassword || conditionalPending());
+      // Muted when LocalPass can't help yet (locked or not connected); the panel explains why.
+      showBadge(field, !useful, () => void chooseInPicker(form));
     })
     .catch(() => {});
 }
@@ -169,16 +111,33 @@ function hideBadgeIfAway(): void {
 // ---- noticing sign-ins ----
 
 let lastCapture = "";
+let lastCaptureByUser = false;
 
-function capture(form: LoginForm): void {
+let lastSeenUser = "";
+
+/**
+ * Whether the DOM event behind a capture shows that the person sent the sign-in: a trusted click
+ * or a trusted Enter key. A submit event does not count: `form.requestSubmit()` and
+ * `button.click()` from a page script fire a submit event with `isTrusted === true` (measured in
+ * Firefox 160 and Chrome 157), so a page could fake it. A capture sent by the user may make the
+ * worker connect to the app; any other capture never does.
+ */
+function sentByUser(e: Event): boolean {
+  return e.isTrusted === true && e.type !== "submit";
+}
+
+function capture(form: LoginForm, byUser: boolean): void {
   const password = form.password?.value ?? "";
+  if (!form.password) return seenUser(form);
   if (!password) return;
   const username = form.username?.value ?? "";
   if (username.length > MAX_CAPTURE_CHARS || password.length > MAX_CAPTURE_CHARS) return; // not a sign-in a person typed
   const key = `${username}\0${password}`;
-  if (key === lastCapture) return;
+  // The same sign-in once, except that a page's own earlier submit does not hide the user's.
+  if (key === lastCapture && (lastCaptureByUser || !byUser)) return;
   lastCapture = key;
-  void ask({ kind: "capture", username, password }).catch(() => {});
+  lastCaptureByUser = byUser;
+  void ask({ kind: "capture", username, password, byUser }).catch(() => {});
   // Single-page sites don't navigate: if the form is gone a moment later, the sign-in worked.
   if (window === window.top) {
     setTimeout(() => {
@@ -187,12 +146,26 @@ function capture(form: LoginForm): void {
   }
 }
 
+/**
+ * The first step of a two-step sign-in (an account name, the password on the next page): the
+ * worker keeps the name for the password step, which has no user name box of its own. This never
+ * makes the worker connect, whoever sent it: the same kind of form is a newsletter box with
+ * `autocomplete="email"`, and signing up for one must not start the app. The password step's
+ * capture connects when the user sends it.
+ */
+function seenUser(form: LoginForm): void {
+  const username = form.username?.value ?? "";
+  if (!username.trim() || username.length > MAX_CAPTURE_CHARS || username === lastSeenUser) return;
+  lastSeenUser = username;
+  void ask({ kind: "seenUser", username }).catch(() => {});
+}
+
 function watchSubmissions(): void {
   document.addEventListener(
     "submit",
     (e) => {
       const form = formOf(e.target as Element);
-      if (form) capture(form);
+      if (form) capture(form, sentByUser(e));
     },
     true,
   );
@@ -201,7 +174,7 @@ function watchSubmissions(): void {
     (e) => {
       const button = (e.target as Element | null)?.closest?.('button, input[type="submit"], [role="button"]');
       const form = formOf(button ?? null);
-      if (form) capture(form);
+      if (form) capture(form, sentByUser(e));
     },
     true,
   );
@@ -210,7 +183,7 @@ function watchSubmissions(): void {
     (e) => {
       if (e.key !== "Enter") return;
       const form = formOf(e.target as Element);
-      if (form) capture(form);
+      if (form) capture(form, sentByUser(e));
     },
     true,
   );
@@ -218,29 +191,22 @@ function watchSubmissions(): void {
 
 async function checkPending(): Promise<void> {
   if (window !== window.top) return;
-  let pending: PendingSave | null = null;
+  let pending: PendingSaveRef | null = null;
   try {
-    pending = await ask<PendingSave | null>({ kind: "pendingSave" });
+    pending = await ask<PendingSaveRef | null>({ kind: "pendingSave" });
   } catch {
     return;
   }
   if (pending) offerSave(pending);
 }
 
-function offerSave(pending: PendingSave): void {
-  if (__FIREFOX__) {
-    void ask({ kind: "decide", ref: crypto.randomUUID(), request: { decision: "saveLogin", id: pending.id } }).catch(() => {});
-    return;
-  }
-  showSaveBar({
-    origin: pending.origin,
-    username: pending.username,
-    onSave: async () => {
-      const outcome = await ask<SaveOutcome>({ kind: "savePending", id: pending.id });
-      return saveMessage(outcome);
-    },
-    onDismiss: (never) => void ask({ kind: "dismissPending", id: pending.id, never }).catch(() => {}),
-  });
+/**
+ * The offer is shown in LocalPass's panel, never in the page. Every page of the tab asks while the capture
+ * lives: the first opens the panel, later ones take the open offer over (after the redirects of a sign-in),
+ * so the background stays awake for it.
+ */
+function offerSave(pending: PendingSaveRef): void {
+  void askDecision(crypto.randomUUID(), { decision: "saveLogin", id: pending.id }).catch(() => {});
 }
 
 // ---- wiring ----
@@ -272,7 +238,3 @@ const ready = () => {
 };
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", ready, { once: true });
 else ready();
-window.addEventListener("pagehide", () => {
-  hideMenu();
-  hideBar();
-});

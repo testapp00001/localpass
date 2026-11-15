@@ -21,6 +21,7 @@ export function Devices() {
   const [syncing, setSyncing] = useState(false);
   const [peerAddr, setPeerAddr] = useState("");
   const [peerBusy, setPeerBusy] = useState(false);
+  const [inviting, setInviting] = useState(false);
 
   const reload = useCallback(() => {
     api.devices().then(setDevices).catch(() => {});
@@ -45,15 +46,18 @@ export function Devices() {
 
   const startInvite = async () => {
     setInviteError(null);
+    setInviting(true);
     try {
       setInvite(await api.inviteStart());
     } catch (e) {
       setInviteError(errorText(e));
+    } finally {
+      setInviting(false);
     }
   };
 
   const closeInvite = () => {
-    api.inviteCancel();
+    api.inviteCancel().catch(() => {});
     setInvite(null);
   };
 
@@ -107,7 +111,7 @@ export function Devices() {
         <Button onClick={syncNow} busy={syncing}>
           <RefreshCw className="size-4" /> Sync now
         </Button>
-        <Button variant="primary" onClick={startInvite}>
+        <Button variant="primary" onClick={startInvite} busy={inviting}>
           <Plus className="size-4" /> Add device
         </Button>
       </div>
@@ -169,7 +173,7 @@ export function Devices() {
               </p>
             )}
             <div className="flex gap-2">
-              <TextInput value={peerAddr} onChange={(e) => setPeerAddr(e.target.value)} placeholder="Other device's address, e.g. 192.168.1.20" />
+              <TextInput value={peerAddr} onChange={(e) => setPeerAddr(e.target.value)} placeholder="Other device's address, e.g. 192.168.1.20" aria-label="Other device's address" />
               <Button onClick={addPeer} disabled={!peerAddr.trim()} busy={peerBusy}>
                 Connect
               </Button>

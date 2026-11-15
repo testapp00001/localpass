@@ -276,6 +276,60 @@ async fn a_declined_unlock_is_reported_as_locked() {
     assert_eq!(ok(c.request(&fill).await)["username"], "alice");
 }
 
+/// Pairs a client that calls itself `name` and returns its connection and credentials.
+async fn pair_named(s: &Setup, name: &str) -> (Client<DuplexStream>, lp_broker::client::Paired) {
+    let options = lp_broker::client::Options::new(name, ClientKind::Extension);
+    Client::pair(connect_stream(s), &options, |_| {})
+        .await
+        .expect("pairing works")
+}
+
+#[tokio::test]
+async fn the_unlock_prompt_is_told_which_client_is_waiting() {
+    let s = setup(false, false);
+    // A name with a bidi override, a control character and spaces around it is cleaned once, at
+    // pairing, and the cleaned name is what the dialog and the unlock screen get.
+    let (mut paired_conn, sneaky) =
+        pair_named(&s, "  \u{202E}Fire\u{7}fox\u{200B} extension ").await;
+    assert_eq!(s.host.prompts.lock().unwrap()[0].name, "Firefox extension");
+    let (_, chrome) = pair_named(&s, "Chrome extension").await;
+    s.host.engine.lock();
+
+    // The very connection that paired asks first: the unlock names it with its paired name.
+    ok(paired_conn.request(&json!({"op": "unlock"})).await);
+    // Another client, logging in with a different name in its hello: the stored name counts.
+    s.host.engine.lock();
+    let mut c = login(&s, &chrome.credentials).await;
+    ok(c.request(&json!({"op": "unlock"})).await);
+    // And the first one again over a fresh connection.
+    s.host.engine.lock();
+    let mut f = Client::connect(
+        connect_stream(&s),
+        &lp_broker::client::Options::new("Chrome extension", ClientKind::Extension),
+        &sneaky.credentials,
+    )
+    .await
+    .unwrap();
+    ok(f.request(&json!({"op": "unlock"})).await);
+    assert_eq!(
+        *s.host.unlock_clients.lock().unwrap(),
+        ["Firefox extension", "Chrome extension", "Firefox extension"]
+    );
+
+    // A name stored before this cleaning existed (a bidi override kept in the record) is
+    // cleaned again before the unlock screen sees it.
+    let mut old = s.host.clients.get(&chrome.credentials.client_id).unwrap();
+    old.name = "\u{202E}Old\u{2066} Chrome".into();
+    s.host.clients.insert(old).unwrap();
+    s.host.engine.lock();
+    let mut c = login(&s, &chrome.credentials).await;
+    ok(c.request(&json!({"op": "unlock"})).await);
+    assert_eq!(
+        s.host.unlock_clients.lock().unwrap().last().unwrap(),
+        "Old Chrome"
+    );
+}
+
 #[tokio::test]
 async fn passkeys_over_the_protocol_need_the_user_check() {
     let s = setup(false, false);

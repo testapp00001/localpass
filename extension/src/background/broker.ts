@@ -9,6 +9,7 @@
 
 import { BrokerError, type ResponseMessage, type ServerMessage, type VaultStatus } from "../shared/protocol";
 import { constantTimeEqual, fromBase64Url, hmacSha256, proofInput, toBase64Url } from "../shared/crypto";
+import { browserName } from "../shared/platform";
 import { local } from "./storage";
 
 const HOST = "app.localpass.host";
@@ -64,15 +65,6 @@ interface Connection {
   trusted: boolean;
   /** Handshake messages are handled one at a time, in order. */
   queue: Promise<void>;
-}
-
-function browserName(): string {
-  const ua = navigator.userAgent;
-  if (ua.includes("Firefox/")) return "Firefox extension";
-  if (ua.includes("Edg/")) return "Microsoft Edge extension";
-  if (ua.includes("OPR/")) return "Opera extension";
-  if (ua.includes("Brave")) return "Brave extension";
-  return "Chrome extension";
 }
 
 export class BrokerClient {
@@ -165,7 +157,7 @@ export class BrokerClient {
     this.send(conn, {
       type: "hello",
       v: PROTOCOL_VERSION,
-      name: browserName(),
+      name: `${browserName()} extension`,
       kind: "extension",
       ...(creds ? { clientId: creds.clientId } : {}),
     });

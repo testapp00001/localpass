@@ -57,7 +57,12 @@ export function PasswordGenerator({ open, onClose, onUse }: { open: boolean; onC
           <IconButton
             label="Copy"
             disabled={!value}
-            onClick={() => api.copyText(value).then((s) => toast(s ? `Copied · clears in ${s}s` : "Copied"))}
+            onClick={() =>
+              api
+                .copyText(value)
+                .then((s) => toast(s ? `Copied · clears in ${s}s` : "Copied"))
+                .catch((e) => toast(errorText(e), "error"))
+            }
           >
             <Copy className="size-4" />
           </IconButton>
@@ -69,6 +74,7 @@ export function PasswordGenerator({ open, onClose, onUse }: { open: boolean; onC
           </label>
           <input
             type="range"
+            aria-label="Length"
             min={8}
             max={64}
             value={opts.length}

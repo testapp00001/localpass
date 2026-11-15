@@ -74,6 +74,8 @@ pub struct TestHost {
     /// Every "may this be overwritten" question, in order.
     pub overwrites: Mutex<Vec<OverwritePrompt>>,
     pub unlocks: AtomicUsize,
+    /// The `client` of every unlock, in order.
+    pub unlock_clients: Mutex<Vec<String>>,
     pub verifies: AtomicUsize,
     pub cancelled: Cancelled,
 }
@@ -101,10 +103,11 @@ impl Host for TestHost {
             self.approve.load(Ordering::SeqCst)
         })
     }
-    fn unlock<'a>(&'a self) -> BoxFuture<'a, bool> {
+    fn unlock<'a>(&'a self, client: &'a str) -> BoxFuture<'a, bool> {
         Box::pin(async move {
             let watch = Watch::new(&self.cancelled.unlocks);
             self.unlocks.fetch_add(1, Ordering::SeqCst);
+            self.unlock_clients.lock().unwrap().push(client.to_string());
             if let Some(gate) = &self.unlock_gate {
                 gate.notified().await;
             }
@@ -169,6 +172,7 @@ pub fn setup_with(approval_gate: bool, unlock_gate: bool, verify_gate: bool) -> 
         reasons: Mutex::new(Vec::new()),
         overwrites: Mutex::new(Vec::new()),
         unlocks: AtomicUsize::new(0),
+        unlock_clients: Mutex::new(Vec::new()),
         verifies: AtomicUsize::new(0),
         cancelled: Cancelled::default(),
     });

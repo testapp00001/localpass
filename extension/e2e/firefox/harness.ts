@@ -12,12 +12,22 @@ import { pathToFileURL } from "node:url";
 const root = resolve(import.meta.dir, "../../..");
 export const extensionDir = resolve(import.meta.dir, "../../dist-firefox-e2e");
 export const shippedDir = resolve(import.meta.dir, "../../dist-firefox");
-const devHostExe = join(root, "target/debug/examples/dev_host");
-const helperExe = join(root, "target/debug/examples/nmhost");
+/** Cargo's output folder: `$CARGO_TARGET_DIR` when set (the binaries just built there), else `<repo>/target`. */
+const targetDir = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : join(root, "target");
+const devHostExe = join(targetDir, "debug/examples/dev_host");
+const helperExe = join(targetDir, "debug/examples/nmhost");
 export const GECKO_ID = "localpass@localpass.local";
 const HOST_NAME = "app.localpass.host";
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The keys `pressKey` can send: their DOM key code, and WebDriver's code point for them. */
+const KEYS = {
+  Escape: { keyCode: 27, webdriver: "\uE00C" },
+  Enter: { keyCode: 13, webdriver: "\uE007" },
+  ArrowUp: { keyCode: 38, webdriver: "\uE013" },
+  ArrowDown: { keyCode: 40, webdriver: "\uE015" },
+} as const;
 
 export interface VaultItem {
   id: string;
@@ -295,6 +305,20 @@ export class FirefoxHarness {
     return contexts;
   }
 
+  /**
+   * The normal toolbar popup (`popup.html` in a toolbar panel, not the popup page in a tab; also `popup.html?from=panel`,
+   * the popup a decision panel turned into), as a `panel:` context, if open.
+   */
+  async toolbarPopup(): Promise<string | undefined> {
+    const windows = (await this.send("browsingContext.getTree", { "moz:scope": "chrome" })).contexts;
+    for (const win of windows) {
+      const found = await this.ev<string>(win.context, `(() => { const b = [...document.querySelectorAll('browser')]
+        .find(b => /\\/popup\\.html(\\?from=panel)?$/.test(b.currentURI?.spec ?? '') && b.closest('panel')); return b ? String(b.browsingContext.id) : ''; })()`);
+      if (found) return `panel:${win.context}:${found}`;
+    }
+    return undefined;
+  }
+
   /** Top-level contexts whose address contains `part` (the decision window is `decide.html`). */
   async find(part: string): Promise<Ctx[]> {
     return (await this.contexts()).filter((c) => c.url.includes(part));
@@ -345,21 +369,38 @@ export class FirefoxHarness {
     return text;
   }
 
-  /** Clicks the window's button (or row) with this label once it is enabled (the window holds acting controls for 600 ms). */
+  /** Clicks the window's button (or row) with this label once it is not held (a window the page caused holds acting controls for 600 ms). */
   async clickWindow(ctx: string, label: string | RegExp, timeoutMs = 8000): Promise<void> {
     const source = label instanceof RegExp ? label.source : label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     await this.waitFor(`button "${label}"`, async () => {
       const r = await this.ev<string>(
         ctx,
-        `(() => { const b = [...document.querySelectorAll('#main button')].find((x) => new RegExp(${JSON.stringify(label instanceof RegExp ? source : `^${source}`)}).test(x.firstChild?.textContent ?? x.textContent ?? '')); if (!b) return 'missing'; if (b.disabled) return 'disabled'; b.click(); return 'clicked'; })()`,
+        `(() => { const b = [...document.querySelectorAll('#main button')].find((x) => new RegExp(${JSON.stringify(label instanceof RegExp ? source : `^${source}`)}).test(x.firstChild?.textContent ?? x.textContent ?? '')); if (!b) return 'missing'; if (b.disabled || b.getAttribute('aria-disabled') === 'true') return 'held'; b.click(); return 'clicked'; })()`,
       );
       return r === "clicked";
     }, timeoutMs);
   }
 
-  /** A key press the browser reports as a real one (BiDi input) in this context. WebDriver code points: Escape is U+E00C. */
-  async pressKey(context: string, key: "Escape") {
-    const value = { Escape: "\uE00C" }[key];
+  /**
+   * A key press the browser reports as a real one in this context. BiDi key input (WebDriver code points: Escape is
+   * U+E00C) does not reach the page in a toolbar panel (measured: not even a plain letter arrives; Firefox's own popup
+   * handling closes the panel on that Esc), so in a panel the key is sent through the panel page's own text input
+   * processor, as Firefox's tests do: a trusted keydown and keyup in that page, which the page may handle first.
+   */
+  async pressKey(context: string, key: keyof typeof KEYS) {
+    if (context.startsWith("panel:")) {
+      const init = JSON.stringify(JSON.stringify({ key, code: key, keyCode: KEYS[key].keyCode }));
+      const sent = await this.ev<string>(
+        context,
+        `(() => { const tip = Components.classes["@mozilla.org/text-input-processor;1"].createInstance(Components.interfaces.nsITextInputProcessor);
+          if (!tip.beginInputTransactionForTests(window)) return 'no transaction';
+          const event = new window.KeyboardEvent("", window.JSON.parse(${init}));
+          tip.keydown(event, tip.KEY_NON_PRINTABLE_KEY); tip.keyup(event, tip.KEY_NON_PRINTABLE_KEY); return 'sent'; })()`,
+      ).catch((e) => String(e)); // the panel may close while the key is handled
+      if (sent !== "sent" && !/closed|destroyed|unknown error|no such/i.test(sent)) throw new Error(`could not press ${key} in the panel: ${sent}`);
+      return;
+    }
+    const value = KEYS[key].webdriver;
     await this.send("input.performActions", {
       context: context.startsWith("panel:") ? context.split(":")[1] : context,
       actions: [{ type: "key", id: "k", actions: [{ type: "keyDown", value }, { type: "keyUp", value }] }],
@@ -395,6 +436,57 @@ export class FirefoxHarness {
     );
     if (!rect) throw new Error(`no element ${selector}`);
     await this.trustedClick(context, JSON.parse(rect));
+  }
+
+  /**
+   * A click on the LocalPass toolbar button of the first browser window, as a person makes it: the button is pinned
+   * to the toolbar (MV3 add-ons start in the Extensions menu) and gets a real mouse click (BiDi input in the browser
+   * window's own chrome context), so Firefox opens the tab's toolbar popup.
+   */
+  async clickToolbarButton(): Promise<string> {
+    const chromeContext = (await this.send("browsingContext.getTree", { "moz:scope": "chrome" })).contexts[0].context;
+    const widget = JSON.stringify(`${GECKO_ID.toLowerCase().replace(/[^a-z0-9_-]/g, "_")}-browser-action`);
+    const rect = await this.ev<string>(
+      chromeContext,
+      `(() => {
+        if (!document.getElementById(${widget})?.closest('#nav-bar')) CustomizableUI.addWidgetToArea(${widget}, CustomizableUI.AREA_NAVBAR);
+        const node = document.getElementById(${widget});
+        if (!node) return '';
+        const button = node.querySelector('.unified-extensions-item-action-button') ?? node.querySelector('toolbarbutton') ?? node;
+        const r = button.getBoundingClientRect();
+        return r.width ? JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2 }) : '';
+      })()`,
+    );
+    if (!rect) return "no button";
+    const { x, y } = JSON.parse(rect);
+    await this.send("input.performActions", {
+      context: chromeContext,
+      actions: [
+        {
+          type: "pointer",
+          id: "toolbar",
+          parameters: { pointerType: "mouse" },
+          actions: [
+            { type: "pointerMove", x: Math.round(x), y: Math.round(y), origin: "viewport" },
+            { type: "pointerDown", button: 0 },
+            { type: "pointerUp", button: 0 },
+          ],
+        },
+      ],
+    });
+    return "clicked";
+  }
+
+  /**
+   * Stops the add-on's background page, as Firefox does when it suspends an idle event page (and as about:debugging's
+   * "Terminate background script" does). Its native-messaging port closes with it; the next event starts it again.
+   */
+  async terminateBackground(): Promise<string> {
+    const chromeContext = (await this.send("browsingContext.getTree", { "moz:scope": "chrome" })).contexts[0].context;
+    return this.ev<string>(
+      chromeContext,
+      `(async () => { const e = WebExtensionPolicy.getByID(${JSON.stringify(GECKO_ID)}).extension; await e.terminateBackground({ disableResetIdleForTest: true }); return String(e.backgroundState); })()`,
+    );
   }
 
   /** The LocalPass badge of the focused field (the e2e build keeps its shadow root open). */

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Fingerprint, KeyRound, Lock } from "lucide-react";
-import { api, errorText, type AppInfo } from "../lib/api";
+import { api, errorText, type AppInfo, type UnlockWaiting } from "../lib/api";
 import { Button, Card, ErrorText, PasswordInput } from "../components/ui";
 
 export function Unlock({ info, onUnlocked }: { info: AppInfo; onUnlocked: () => void }) {
@@ -10,6 +10,17 @@ export function Unlock({ info, onUnlocked }: { info: AppInfo; onUnlocked: () => 
   const quick = info.quickUnlock;
   // Set once Windows Hello has been offered by itself (or is being offered).
   const triedQuick = useRef(false);
+  // The browser waiting for this unlock, if one asked for it. The screen asks on mount and also
+  // listens; whichever answer is newer (higher version) wins, so an event that came before the
+  // screen was listening is not lost and a slow first answer does not undo a newer event.
+  const [waiting, setWaiting] = useState<UnlockWaiting>({ version: -1, name: null });
+  useEffect(() => {
+    const take = (next: UnlockWaiting) => setWaiting((current) => (next.version > current.version ? next : current));
+    const onWaiting = (e: Event) => take((e as CustomEvent<UnlockWaiting>).detail);
+    window.addEventListener("lp-unlock-waiting", onWaiting);
+    api.brokerUnlockWaiting().then(take).catch(() => {});
+    return () => window.removeEventListener("lp-unlock-waiting", onWaiting);
+  }, []);
 
   const unlock = async () => {
     setBusy(true);
@@ -68,6 +79,11 @@ export function Unlock({ info, onUnlocked }: { info: AppInfo; onUnlocked: () => 
           <h1 className="text-xl font-semibold">Unlock LocalPass</h1>
           {info.deviceName && <p className="text-sm text-slate-500 dark:text-slate-400">{info.deviceName}</p>}
         </div>
+        {waiting.name && (
+          <p role="status" className="mb-4 rounded-lg bg-indigo-50 px-3 py-2 text-center text-sm text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100">
+            {waiting.name} is waiting: unlock LocalPass to continue.
+          </p>
+        )}
         <form
           className="space-y-4"
           onSubmit={(e) => {
@@ -75,7 +91,7 @@ export function Unlock({ info, onUnlocked }: { info: AppInfo; onUnlocked: () => 
             if (password) unlock();
           }}
         >
-          <PasswordInput placeholder="Master password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
+          <PasswordInput placeholder="Master password" aria-label="Master password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
           <ErrorText>{error}</ErrorText>
           <Button type="submit" variant="primary" className="w-full" disabled={!password} busy={busy}>
             <KeyRound className="size-4" /> Unlock

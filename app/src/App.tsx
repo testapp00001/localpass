@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Globe, KeyRound, ShieldQuestion } from "lucide-react";
-import { api, onEvent, type AppInfo, type ClientKind, type PairingRequest } from "./lib/api";
+import { api, errorText, onEvent, type AppInfo, type ClientKind, type PairingRequest } from "./lib/api";
 import { platformLabel } from "./lib/format";
 import { Button, Modal, Spinner } from "./components/ui";
 import { useToast } from "./components/Toaster";
@@ -41,7 +41,7 @@ export default function App() {
   const lastTouch = useRef(0);
 
   const refresh = useCallback(() => {
-    api.appInfo().then(setInfo).catch((e) => toast(String(e), "error"));
+    api.appInfo().then(setInfo).catch((e) => toast(errorText(e), "error"));
   }, [toast]);
 
   useEffect(refresh, [refresh]);
@@ -107,6 +107,9 @@ export default function App() {
         case "windowShown":
           window.dispatchEvent(new Event("lp-window-shown"));
           break;
+        case "unlockWaiting":
+          window.dispatchEvent(new CustomEvent("lp-unlock-waiting", { detail: { version: e.version, name: e.name } }));
+          break;
         case "extensionPairingCancelled":
           // The program that asked gave up; there is nothing left to answer.
           setBrowserPairing((current) => (current?.requestId === e.requestId ? null : current));
@@ -163,12 +166,24 @@ export default function App() {
 
   const respondBrowser = (approve: boolean) => {
     if (!browserPairing) return;
-    api.brokerRespond(browserPairing.requestId, approve).catch(() => {});
+    const { requestId, kind } = browserPairing;
     setBrowserPairing(null);
-    if (approve) {
-      toast(browserPairing.kind === "provider" ? "Windows passkey provider connected" : "Browser connected");
-      window.dispatchEvent(new Event("lp-browser-paired"));
+    const sent = api.brokerRespond(requestId, approve);
+    if (!approve) {
+      sent.catch(() => {});
+      return;
     }
+    const provider = kind === "provider";
+    sent
+      .then((connected) => {
+        if (connected) {
+          toast(provider ? "Windows passkey provider connected" : "Browser connected");
+          window.dispatchEvent(new Event("lp-browser-paired"));
+        } else {
+          toast(`That request had already ended, so the ${provider ? "Windows passkey provider" : "browser"} was not connected. Try again.`, "error");
+        }
+      })
+      .catch((e) => toast(errorText(e), "error"));
   };
 
   const respondOverwrite = (replace: boolean) => {

@@ -23,6 +23,11 @@ const USERNAME_HINT = /user|login|e-?mail|account|identifier|\bid\b|phone|member
 const SEARCH_HINT = /search|query|find|filter/i;
 const OTP_HINT = /otp|one.?time|2fa|two.?factor|totp|authenticator|verification|security.?code|passcode|\bcode\b|token/i;
 const NEW_PASSWORD_HINT = /new|confirm|repeat|retype|again/i;
+/**
+ * Names that only a one-time code box has. Narrower than OTP_HINT on purpose: "passcode", "token",
+ * "pin" and a bare "code" also name real passwords, so they never turn a password box into a code box.
+ */
+const STRONG_OTP_HINT = /otp|one.?time|2fa|two.?factor|totp|authenticator|verification.?code|security.?code|sms.?code/i;
 
 function attr(el: Element, name: string): string {
   return el.getAttribute(name) ?? "";
@@ -63,8 +68,30 @@ function isUsernameCandidate(el: HTMLInputElement): boolean {
   return true;
 }
 
+/**
+ * A `type=password` box that asks for a one-time code, not the account's password (some sites hide
+ * the code as it is typed). It is not a login password, so it is not filled with one and what is
+ * typed into it is never offered for saving. The rule is conservative, because dropping a real
+ * password box would break sign-in:
+ * - a `current-password` or `new-password` token always means a password;
+ * - otherwise `autocomplete="one-time-code"` (the page says so) means a code;
+ * - otherwise only a strong one-time-code name (STRONG_OTP_HINT, in its name, id, placeholder,
+ *   label or autocomplete) on a box made for a short code (a maxlength of 4 to 10, or
+ *   `inputmode="numeric"`) means a code, and never when its name or id looks like an account name.
+ */
+export function isOtpPasswordBox(el: HTMLInputElement): boolean {
+  if (el.type.toLowerCase() !== "password") return false;
+  const tokens = autocompleteTokens(el);
+  if (tokens.includes("current-password") || tokens.includes("new-password")) return false;
+  if (tokens.includes("one-time-code")) return true;
+  const max = Number(attr(el, "maxlength"));
+  const shortCode = (max >= 4 && max <= 10) || attr(el, "inputmode").toLowerCase() === "numeric";
+  return shortCode && STRONG_OTP_HINT.test(hintText(el)) && !USERNAME_HINT.test(attr(el, "name") + el.id);
+}
+
 export function isOtpField(el: HTMLInputElement): boolean {
   if (!["text", "tel", "number", "password", ""].includes(el.type.toLowerCase())) return false;
+  if (el.type.toLowerCase() === "password") return isOtpPasswordBox(el);
   if (autocompleteTokens(el).includes("one-time-code")) return true;
   const max = Number(attr(el, "maxlength"));
   const shortField = max >= 4 && max <= 10;
@@ -116,7 +143,10 @@ function pickUsername(root: Element, password: HTMLInputElement, options: Detect
 export function findLoginForms(doc: Document, options: DetectOptions = {}): LoginForm[] {
   const forms: LoginForm[] = [];
   const claimed = new Set<Element>();
-  const passwords = [...doc.querySelectorAll<HTMLInputElement>('input[type="password"]')].filter((el) => isFillable(el, options));
+  // A one-time code box of type=password is not a password (see isOtpPasswordBox): it is found below as the code box.
+  const passwords = [...doc.querySelectorAll<HTMLInputElement>('input[type="password"]')].filter(
+    (el) => isFillable(el, options) && !isOtpPasswordBox(el),
+  );
 
   for (const password of passwords) {
     if (claimed.has(password)) continue;

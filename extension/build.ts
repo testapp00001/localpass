@@ -1,6 +1,6 @@
 // Builds the extension into dist/: bundles each script and copies the static files.
-// Content scripts must be classic scripts, so they are bundled as IIFEs; the service worker and
-// the popup are modules.
+// Content scripts must be classic scripts, so they are bundled as IIFEs; the service worker, the
+// popup and the decision page are modules.
 import { cp, mkdir, rm } from "node:fs/promises";
 import { firefoxManifest } from "./manifest-firefox";
 
@@ -17,10 +17,9 @@ const bundles: { entry: string; name: string; format: "esm" | "iife" }[] = [
   { entry: "src/content/index.ts", name: "content", format: "iife" },
   { entry: "src/content/inject.ts", name: "inject", format: "iife" },
   { entry: "src/popup/index.ts", name: "popup", format: "esm" },
+  // The decision panel (or window), where every choice is made in every browser.
+  { entry: "src/decide/index.ts", name: "decide", format: "esm" },
 ];
-
-// The decision window exists only in the Firefox add-on (the Chrome extension decides in the page).
-if (firefox) bundles.push({ entry: "src/decide/index.ts", name: "decide", format: "esm" });
 
 let failed = false;
 for (const { entry, name, format } of bundles) {
@@ -52,5 +51,4 @@ if (firefox) {
   await cp("manifest.json", `${out}/manifest.json`);
 }
 await cp("public", out, { recursive: true });
-if (firefox) await cp("public-firefox", out, { recursive: true });
 console.log(`built ${out}/`);
