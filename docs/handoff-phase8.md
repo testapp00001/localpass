@@ -48,6 +48,11 @@ Next steps, in this order:
   `nmhost` example. The test now searches ancestor folders for the built example, and both CI jobs build examples before tests.
   Reproduced locally by relocating the old test executable (failed), then reran the corrected broker suite (109 passed) and all
   three tests from the nested layout (3 passed); formatting and diff checks passed. No production behavior changed.
+- The cancelled Windows web job also exposed shared-global test leakage: `content-fill.test.ts` installs a passkey bridge, then
+  `content-passkeys.test.ts` installs another on the same window, producing duplicate decisions and leaking keep-alive timers into
+  later files. Running those files in that order reproduced the same four failures locally. `extension/package.json` now runs
+  `bun test --isolate`, and CI uses `bun run test`; all 443 extension tests passed with per-file isolation. No assertion was removed
+  or weakened. Use `bun run test` for future full-suite checks.
 
 **For the user: one list**
 

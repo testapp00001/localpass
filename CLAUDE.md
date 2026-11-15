@@ -49,7 +49,7 @@ Browser extension (`extension/`, Chrome and Edge, TypeScript built with Bun):
 cd extension && bun install
 bun run build            # extension/dist (also built by `bun run build:all` in app/ before `tauri build`)
 bun run build --firefox  # extension/dist-firefox (manifest derived in manifest-firefox.ts; gecko id read from lp-broker's FIREFOX_EXTENSION_ID); lint: bunx web-ext@8 lint -s dist-firefox
-bun test                 # form-detection tests (happy-dom), the relying party (software authenticator) and the Windows provider test's log/verdict logic
+bun run test             # all extension tests, isolated per file so browser mocks and timers cannot leak between files
 bunx tsc --noEmit
 # Real browser end to end with the installed Chrome (BROWSER=edge for Edge; on Linux also chromium|brave|vivaldi). run.ts and passkeys.ts run on Windows and on Linux (headless, throwaway HOME/profile/runtime dir, LP_CHROME_HEADED=1 shows the window); app.ts, host.ts and windows-*.ts are Windows only:
 cargo build -p lp-broker --examples && cd extension && bun run build --e2e && bun run e2e/run.ts
