@@ -56,6 +56,14 @@ pub struct IngestReport {
     pub roster_changed: bool,
 }
 
+/// A store/roster snapshot taken under the store-first lock order used by writers.
+pub struct ReplicaSnapshot {
+    pub version: u64,
+    pub roster_len: usize,
+    pub view: RosterView,
+    pub ops: Vec<SignedOp>,
+}
+
 pub struct Replica {
     vault_id: VaultId,
     genesis: DeviceId,
@@ -139,6 +147,24 @@ impl Replica {
         Ok(self.store().version_vector()?)
     }
 
+    pub fn snapshot_since(&self, applied: &VersionVector) -> Result<ReplicaSnapshot> {
+        let store = self.store();
+        let cache = self.roster.read().expect("roster lock");
+        let mut ops = Vec::new();
+        for (author, max) in store.version_vector()? {
+            let have = applied.get(&author).copied().unwrap_or(0);
+            if max > have {
+                ops.extend(store.ops_after(&author, have, (max - have) as usize)?);
+            }
+        }
+        Ok(ReplicaSnapshot {
+            version: self.version(),
+            roster_len: cache.records.len(),
+            view: cache.view.clone(),
+            ops,
+        })
+    }
+
     /// Roster ops proving this device's membership.
     pub fn membership_proof(&self) -> Result<Vec<SignedOp>> {
         {
@@ -159,23 +185,37 @@ impl Replica {
     /// Identifies the peer behind a Noise static key. Unknown keys must come
     /// with a proof chain that makes them an active member.
     pub fn verify_peer(&self, remote: &NoisePublicKey, proof: &[SignedOp]) -> Result<DeviceId> {
-        let cache = self.roster.read().expect("roster lock");
-        if let Some((id, rec)) = cache.view.by_noise_key(remote) {
-            return match rec.status {
-                DeviceStatus::Active => Ok(id),
-                DeviceStatus::Revoked { .. } => Err(SyncError::Revoked),
-                DeviceStatus::Pending => Err(SyncError::NotMember),
-            };
-        }
         if proof.len() > MAX_PROOF_OPS {
             return Err(SyncError::Protocol("membership proof too long".into()));
         }
+        // Ingest and local append acquire store before roster. Keep both guards
+        // until admission has used one consistent log/roster snapshot.
+        let store = self.store();
+        let cache = self.roster.read().expect("roster lock");
+        let vv = store.version_vector()?;
         let mut records = cache.records.clone();
+        let mut seen = BTreeMap::new();
         for op in proof {
             if op.header().vault_id != self.vault_id || op.class() != OpClass::Roster {
                 return Err(SyncError::NotMember);
             }
             op.verify_signature().map_err(|_| SyncError::NotMember)?;
+            if let Some(header) = seen.insert(op.op_ref(), op.header_bytes()) {
+                if header != op.header_bytes() {
+                    return Err(SyncError::NotMember);
+                }
+                continue;
+            }
+            // Every operation class occupies the same author/sequence log.
+            // A proof must never supply an alternative to a data record, or
+            // fill a hole inside a prefix the local store claims is complete.
+            if let Some(existing) = store.get_op(&op.author(), op.seq())? {
+                if existing.header_bytes() != op.header_bytes() {
+                    return Err(SyncError::NotMember);
+                }
+            } else if op.seq() <= vv.get(&op.author()).copied().unwrap_or(0) {
+                return Err(SyncError::NotMember);
+            }
             if !cache.ops.contains_key(&op.op_ref()) {
                 let decoded = op.decode_roster().map_err(|_| SyncError::NotMember)?;
                 records.push(RosterRecord {
@@ -503,5 +543,164 @@ mod tests {
             .unwrap();
         assert_eq!(op.seq(), 2);
         assert_eq!(r.membership_proof().unwrap(), vec![genesis]);
+    }
+
+    #[test]
+    fn audit_membership_proof_cannot_replace_a_stored_data_op() {
+        let (v, p, genesis) = new_vault();
+        let (removed, rogue) = (TestDevice::new(), TestDevice::new());
+        let r = replica_with(v, &genesis, p.id());
+        let add = create_roster_op(
+            v,
+            &p.sk,
+            2,
+            &RosterOp::DeviceAdded {
+                keys: removed.keys(&v),
+                added_ms: 0,
+            },
+        )
+        .unwrap();
+        let data = create_data_op(
+            v,
+            &Key32::random().unwrap(),
+            &removed.sk,
+            1,
+            &DataOp::Unknown,
+        )
+        .unwrap();
+        let revoke = create_roster_op(
+            v,
+            &p.sk,
+            3,
+            &RosterOp::DeviceRevoked {
+                device: removed.id(),
+                cutoff_seq: 1,
+                revoked_ms: 0,
+            },
+        )
+        .unwrap();
+        r.ingest(vec![add, data, revoke], &mut Vec::new()).unwrap();
+        let conflict = create_roster_op(
+            v,
+            &removed.sk,
+            1,
+            &RosterOp::DeviceAdded {
+                keys: rogue.keys(&v),
+                added_ms: 0,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            r.verify_peer(&rogue.noise.public(), &[conflict]),
+            Err(SyncError::NotMember)
+        ));
+    }
+
+    #[test]
+    fn audit_proof_rejects_contradictions_even_for_a_known_peer() {
+        let (v, p, genesis) = new_vault();
+        let (a, b) = (TestDevice::new(), TestDevice::new());
+        let r = replica_with(v, &genesis, p.id());
+        let add_a = create_roster_op(
+            v,
+            &p.sk,
+            2,
+            &RosterOp::DeviceAdded {
+                keys: a.keys(&v),
+                added_ms: 0,
+            },
+        )
+        .unwrap();
+        let add_b = create_roster_op(
+            v,
+            &p.sk,
+            2,
+            &RosterOp::DeviceAdded {
+                keys: b.keys(&v),
+                added_ms: 0,
+            },
+        )
+        .unwrap();
+        for remote in [a.noise.public(), p.noise.public()] {
+            assert!(matches!(
+                r.verify_peer(&remote, &[add_a.clone(), add_b.clone()]),
+                Err(SyncError::NotMember)
+            ));
+        }
+        assert_eq!(
+            r.verify_peer(&a.noise.public(), &[add_a.clone(), add_a])
+                .unwrap(),
+            a.id()
+        );
+    }
+
+    #[test]
+    fn audit_proof_rejects_roster_forks_and_oversize_for_known_peers() {
+        let (v, p, genesis) = new_vault();
+        let (a, b) = (TestDevice::new(), TestDevice::new());
+        let r = replica_with(v, &genesis, p.id());
+        let add_a = create_roster_op(
+            v,
+            &p.sk,
+            2,
+            &RosterOp::DeviceAdded {
+                keys: a.keys(&v),
+                added_ms: 0,
+            },
+        )
+        .unwrap();
+        r.ingest(vec![add_a], &mut Vec::new()).unwrap();
+        let fork = create_roster_op(
+            v,
+            &p.sk,
+            2,
+            &RosterOp::DeviceAdded {
+                keys: b.keys(&v),
+                added_ms: 0,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            r.verify_peer(&b.noise.public(), &[fork]),
+            Err(SyncError::NotMember)
+        ));
+        assert!(
+            r.verify_peer(&p.noise.public(), &vec![genesis; MAX_PROOF_OPS + 1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn audit_proof_cannot_fill_a_hole_in_an_allegedly_complete_prefix() {
+        let (v, p, genesis) = new_vault();
+        let rogue = TestDevice::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.db");
+        let mut store = Store::open(&path).unwrap();
+        let vk = Key32::random().unwrap();
+        let second = create_data_op(v, &vk, &p.sk, 2, &DataOp::Unknown).unwrap();
+        let third = create_data_op(v, &vk, &p.sk, 3, &DataOp::Unknown).unwrap();
+        store.append_batch(&[genesis, second, third], 0).unwrap();
+        // Simulate damaged local storage without adding a production API that
+        // can mutate the gapless log.
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute("DELETE FROM ops WHERE seq = 2", [])
+            .unwrap();
+        let r = Replica::open(Arc::new(Mutex::new(store)), v, p.id(), p.id()).unwrap();
+        let forged_prefix = create_roster_op(
+            v,
+            &p.sk,
+            2,
+            &RosterOp::DeviceAdded {
+                keys: rogue.keys(&v),
+                added_ms: 0,
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            r.verify_peer(&rogue.noise.public(), &[forged_prefix]),
+            Err(SyncError::NotMember)
+        ));
     }
 }

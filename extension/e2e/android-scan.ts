@@ -1,10 +1,11 @@
+import { requireEmulator } from "./adb";
 // QR scanning in the Android app: the camera screen must close again with its Cancel button and with
 // the system Back button, and open again afterwards. Regression test for the "stuck on the scanning
 // screen" bug (tauri-plugin-barcode-scanner's `cancel` forgets the pending `scan()` call before it
 // rejects it, so the page never left the see-through scanning screen; see app/src/lib/scan.ts).
 //
 // Needs an emulator with a back camera (AVD lp_api37: hw.camera.back=emulated), unlocked. It starts
-// from a clean install (the app's data on the emulator is wiped), grants nothing but the local-network
+// from a clean install (only the audit app's data on the emulator is wiped), grants nothing but the local-network
 // permission up front and answers the camera permission box itself.
 //
 //   debug build (reads the page state over DevTools as well, and shows the plugin bug first):
@@ -27,6 +28,8 @@ import { adb, find, key, labels, screen, shell, sleep, tapNode, type, waitFor, t
 import { PACKAGE, connectToApp } from "./android";
 
 const LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK";
+requireEmulator();
+
 const MASTER_PASSWORD = "scan test master password";
 const OVERLAY = /Point the camera at the QR code/;
 const argv = process.argv.slice(2);
@@ -89,12 +92,12 @@ const unlockPhone = async () => {
 const startApp = async () => {
   key("KEYCODE_HOME");
   shell("am", "force-stop", PACKAGE);
-  shell("am", "start", "-W", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-W", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(3500);
 };
 /** Brings the app back after it left (the activity is rebuilt, the process may live on). */
 const relaunch = async () => {
-  shell("am", "start", "-W", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-W", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(3000);
 };
 const connect = async () => {
@@ -180,7 +183,7 @@ async function session(name: string, button: RegExp, how: "cancel" | "back", exp
 try {
   await unlockPhone();
   // ---- install ----
-  adb("uninstall", PACKAGE); // a clean start, and a build signed with another key cannot be installed over
+  if (shell("pm", "list", "packages", PACKAGE).trim()) adb("uninstall", PACKAGE); // a clean start, and a build signed with another key cannot be installed over
   const out = adb("install", apk);
   check(`the ${release ? "release" : "debug"} apk installs`, out.includes("Success"), out.trim().split("\n").pop());
   const badge = shell("dumpsys", "package", PACKAGE).match(/versionName=(\S+)/)?.[1];

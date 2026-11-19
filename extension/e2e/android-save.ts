@@ -18,7 +18,7 @@ import { adb, find, key, labels, screen, scrollTo, shell, sleep, tap, tapNode, t
 import { MASTER_PASSWORD, PACKAGE, connectToApp } from "./android";
 
 const CHROME = "com.android.chrome";
-const AUTOFILL = `${PACKAGE}/${PACKAGE}.LpAutofillService`;
+const AUTOFILL = `${PACKAGE}/app.localpass.LpAutofillService`;
 const APK = resolve(import.meta.dir, "../../app/src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk");
 const HOST = "127.0.0.1";
 const run = Date.now().toString(36);
@@ -62,7 +62,7 @@ try {
   adb("reverse", `tcp:${port}`, `tcp:${port}`);
   shell("am", "force-stop", CHROME);
   shell("input", "keyevent", "KEYCODE_HOME");
-  shell("am", "start", "-W", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-W", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(8000);
   const wait = find(/^Wait$/);
   if (wait) tapNode(wait);
@@ -70,7 +70,7 @@ try {
   await app.invoke("app_info");
   await sleep(5000);
   inApp = async <T,>(call: () => Promise<T>): Promise<T> => {
-    shell("am", "start", "-n", `${PACKAGE}/.MainActivity`);
+    shell("am", "start", "-n", `${PACKAGE}/app.localpass.MainActivity`);
     await sleep(700);
     return call();
   };

@@ -1,0 +1,37 @@
+[
+  {
+    "advisory": "RUSTSEC-2024-0429",
+    "package": "glib",
+    "version": "0.18.5",
+    "reason": "Tauri/GTK requires glib 0.18. Application code does not use VariantStrIter, but indirect GTK reachability is not ruled out. Runtime unsoundness remains open until the GTK stack upgrades or a maintained backport is validated.",
+    "reviewBy": "2026-12-16"
+  },
+  {
+    "advisory": "RUSTSEC-2024-0370",
+    "package": "proc-macro-error",
+    "version": "1.0.4",
+    "reason": "Build-time macro dependency through the desktop GTK stack. Unmaintained package; no identified runtime entry point. Replace with the upstream stack upgrade.",
+    "reviewBy": "2026-12-16"
+  },
+  {
+    "advisory": "RUSTSEC-2026-0371",
+    "package": "zbus_names",
+    "version": "4.3.4",
+    "reason": "Linux Secret Service keyring transitively uses these D-Bus name types. Maintenance advisory, not an identified vulnerability; follow secret-service migration to zbus 6.",
+    "reviewBy": "2026-12-16"
+  },
+  {
+    "advisory": "RUSTSEC-2026-0370",
+    "package": "zvariant",
+    "version": "5.15.0",
+    "reason": "Linux Secret Service uses this D-Bus wire format at runtime. Maintenance advisory, not an identified vulnerability; follow secret-service migration to zbus 6.",
+    "reviewBy": "2026-12-16"
+  },
+  {
+    "advisory": "RUSTSEC-2026-0372",
+    "package": "zvariant_derive",
+    "version": "5.15.0",
+    "reason": "Build-time derivation for the Linux D-Bus stack. Maintenance advisory, not an identified runtime flaw; follow secret-service migration to zbus 6.",
+    "reviewBy": "2026-12-16"
+  }
+]

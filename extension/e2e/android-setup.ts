@@ -15,7 +15,7 @@ import { resolve } from "node:path";
 import { adb, find, key, labels, shell, sleep, tapNode, waitFor } from "./adb";
 import { MASTER_PASSWORD, PACKAGE, connectToApp } from "./android";
 
-const AUTOFILL = `${PACKAGE}/${PACKAGE}.LpAutofillService`;
+const AUTOFILL = `${PACKAGE}/app.localpass.LpAutofillService`;
 const APK = resolve(import.meta.dir, "../../app/src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk");
 const LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK";
 
@@ -37,7 +37,7 @@ try {
   shell("pm", "grant", PACKAGE, LOCAL_NETWORK);
   shell("input", "keyevent", "KEYCODE_HOME");
   shell("am", "force-stop", PACKAGE);
-  shell("am", "start", "-W", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-W", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(8000);
   const wait = find(/^Wait$/);
   if (wait) tapNode(wait);
@@ -47,7 +47,7 @@ try {
 
   /** The app in front (Android freezes a background web view), then `call`. */
   const inApp = async <T>(call: () => Promise<T>): Promise<T> => {
-    shell("am", "start", "-n", `${PACKAGE}/.MainActivity`);
+    shell("am", "start", "-n", `${PACKAGE}/app.localpass.MainActivity`);
     await sleep(900);
     return call();
   };
@@ -127,7 +127,7 @@ try {
   console.log(`info  credential provider after that: ${secure("credential_service_primary")}`);
   key("KEYCODE_BACK");
   await sleep(1200);
-  shell("am", "start", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   check(
     "the section shows On after coming back, without a reload",
     await settle(async () => row(await section(), "Autofill passwords") === "On"),
@@ -141,7 +141,7 @@ try {
   await sleep(1000);
 
   // ---- passkeys: no invented status, and the button opens the provider page ----
-  shell("am", "start", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   text = await section();
   check("passkeys show no On/Off claim (Android hides it from apps)", row(text, "Passkeys") === "" && text.includes("Open settings and switch LocalPass on."), JSON.stringify(text));
   check("and the Open settings button is there", text.includes("Open settings"));
@@ -155,7 +155,7 @@ try {
   // ---- local network: denied -> Allow opens the app's permissions -> granted ----
   shell("pm", "revoke", PACKAGE, LOCAL_NETWORK); // this ends the app's process; it starts again below
   await sleep(2000);
-  shell("am", "start", "-W", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-W", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(7000);
   const dont = find(/^Don.t allow$/i);
   if (dont) tapNode(dont); // the app asks at start-up on Android 17; the answer here is no
@@ -174,7 +174,7 @@ try {
   shell("pm", "grant", PACKAGE, LOCAL_NETWORK);
   await sleep(2500);
   app.browser.disconnect().catch(() => {});
-  shell("am", "start", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(6000);
   app = await connectToApp();
   if ((await status()) === "locked") await inApp(() => app!.invoke("unlock", { password: MASTER_PASSWORD }));

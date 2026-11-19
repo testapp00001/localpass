@@ -1,3 +1,6 @@
+import { adbExpectedFailure } from "./adb";
+import { requireEmulator } from "./adb";
+import { TEST_PACKAGE } from "./adb";
 // Smoke test of the signed RELEASE apk on an emulator (AVD lp_api37): first start, creating a vault,
 // the "Autofill and passkeys" section, saving a password, filling it, and creating and using a passkey.
 //
@@ -8,19 +11,21 @@
 //
 //   cd extension && bun run e2e/android-release.ts path\to\localpass-<version>-universal-release.apk
 //
-// It removes any installed LocalPass first (a clean first start; a release build is signed with
+// It removes only the isolated audit app first (a clean first start; a release build is signed with
 // another key than a debug build, which Android refuses to install over), so the emulator's
-// LocalPass data is wiped. The
+// audit app data is wiped. The
 // autofill and credential provider settings and the port forwards are put back at the end.
 
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
 import { adb, find, key, labels, screen, scrollTo, shell, sleep, tapNode, type, waitFor } from "./adb";
 import { startRelyingParty } from "./rp";
 
-const PACKAGE = "app.localpass";
+const PACKAGE = TEST_PACKAGE;
+requireEmulator();
+
 const CHROME = "com.android.chrome";
-const AUTOFILL = `${PACKAGE}/${PACKAGE}.LpAutofillService`;
-const PROVIDER = `${PACKAGE}/${PACKAGE}.LpCredentialProviderService`;
+const AUTOFILL = `${PACKAGE}/app.localpass.LpAutofillService`;
+const PROVIDER = `${PACKAGE}/app.localpass.LpCredentialProviderService`;
 const MASTER_PASSWORD = "release smoke master password";
 const HOST = "127.0.0.1";
 const apk = process.argv[2];
@@ -61,7 +66,7 @@ const fingerprint = async (prompt: string | RegExp) => {
 };
 /** Brings LocalPass to the front. */
 const front = async () => {
-  shell("am", "start", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(1500);
 };
 const inputs = () => screen().filter((n) => n.cls.endsWith("EditText"));
@@ -76,16 +81,16 @@ const typeInto = async (index: number, text: string) => {
 
 try {
   // ---- install ----
-  adb("uninstall", PACKAGE); // a clean first start; also needed when a debug build (another key) is installed
+  if (shell("pm", "list", "packages", PACKAGE).trim()) adb("uninstall", PACKAGE); // a clean first start; also needed when a debug build (another key) is installed
   const out = adb("install", apk);
   check("the release apk installs", out.includes("Success"), out.trim().split("\n").pop());
-  const runAs = shell("run-as", PACKAGE, "id");
+  const runAs = adbExpectedFailure("shell", "run-as", PACKAGE, "id");
   check("run-as is refused (the release build is not debuggable)", /not debuggable|unknown package|is not an application/i.test(runAs) && !/uid=/.test(runAs), runAs.slice(0, 80));
 
   // ---- first start ----
   adb("shell", "input", "keyevent", "KEYCODE_HOME");
   shell("am", "force-stop", PACKAGE);
-  shell("am", "start", "-W", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-W", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(3000);
   const pid = shell("pidof", PACKAGE).split(/\s+/)[0] ?? "";
   // A userdebug system image (the emulator) opens every web view to DevTools; only a "user" build

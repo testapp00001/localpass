@@ -1,0 +1,14 @@
+# Proof tests for audit/REPORT.md. Stand-alone on purpose: it is not a member of the main
+# workspace, so nothing in the tracked tree changes. Run with:
+#   cd audit/poc && CARGO_TARGET_DIR=/tmp/lp-audit-target cargo test --offline
+[package]
+name = "lp-audit-poc"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+lp-core = { path = "../../crates/lp-core" }
+uuid = "1"

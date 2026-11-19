@@ -3,16 +3,108 @@
 // pages, so they can only be driven this way).
 
 import { join } from "node:path";
+import { androidTarget, assertEmulator } from "./android-target";
 
-const sdk = process.env.ANDROID_HOME ?? join(process.env.LOCALAPPDATA ?? "", "Android", "Sdk");
-export const ADB = join(sdk, "platform-tools", "adb.exe");
+const target = androidTarget(process.env);
+export const TEST_PACKAGE = target.package;
+const sdk = process.env.ANDROID_HOME;
+export const ADB = sdk ? join(sdk, "platform-tools", process.platform === "win32" ? "adb.exe" : "adb") : "adb";
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Runs adb and returns its output (stderr is folded in so errors are visible). */
+function runAdb(args: string[], allowFailure = false): string {
+  const run = Bun.spawnSync([ADB, "-s", target.serial, ...args], { stdout: "pipe", stderr: "pipe" });
+  const output = run.stdout.toString() + run.stderr.toString();
+  const absentProcess = args[0] === "shell" && args[1] === "pidof" && run.exitCode === 1 && !output.trim();
+  if (run.exitCode !== 0 && !allowFailure && !absentProcess) throw new Error(`ADB ${args.slice(0, 3).join(" ")} failed (${run.exitCode}): ${output.trim()}`);
+  return output;
+}
+
+const savedSettings = new Map<string, string>();
+const savedForwards = new Map<string, string | undefined>();
+function restoreForward(mode: string, local: string, remote: string | undefined): void {
+  if (remote) runAdb([mode, local, remote]);
+  else {
+    const exists = runAdb([mode, "--list"]).split(/\r?\n/).some(line => {
+      const parts = line.trim().split(/\s+/);
+      return parts[1] === local && (mode === "reverse" || parts[0] === target.serial);
+    });
+    if (exists) runAdb([mode, "--remove", local]);
+  }
+}
+
+/** Restore exactly the settings and port mappings this run changed, even on an early failure. */
+export function restoreAndroidState(): void {
+  const failures: string[] = [];
+  for (const [key, value] of savedSettings) {
+    try {
+      runAdb(value === "null" || !value ? ["shell", "settings", "delete", "secure", key] : ["shell", "settings", "put", "secure", key, value]);
+      savedSettings.delete(key);
+    } catch (error) { failures.push(String(error)); }
+  }
+  for (const [key, remote] of savedForwards) {
+    const [mode, local] = key.split(" ") as [string, string];
+    try {
+      restoreForward(mode, local, remote);
+      savedForwards.delete(key);
+    } catch (error) { failures.push(String(error)); }
+  }
+  if (failures.length) throw new Error(`Android cleanup failed:\n${failures.join("\n")}`);
+}
+process.once("exit", () => {
+  try { restoreAndroidState(); } catch (error) { console.error(String(error)); process.exitCode = 1; }
+});
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(130));
+
+export function requireEmulator(): void {
+  assertEmulator(runAdb(["shell", "getprop", "ro.kernel.qemu"]));
+}
+
+function checkApk(apk: string): void {
+  const analyzer = sdk ? join(sdk, "cmdline-tools", "latest", "bin", process.platform === "win32" ? "apkanalyzer.bat" : "apkanalyzer") : "apkanalyzer";
+  const result = Bun.spawnSync([analyzer, "manifest", "application-id", apk], { stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0 || result.stdout.toString().trim() !== TEST_PACKAGE) {
+    throw new Error(`Refusing APK: manifest must identify ${TEST_PACKAGE} (use -Plocalpass.audit=true)`);
+  }
+}
+
+/** Commands always select the explicit serial and fail on unsuccessful execution. */
 export function adb(...args: string[]): string {
-  const run = Bun.spawnSync([ADB, ...args], { stdout: "pipe", stderr: "pipe" });
-  return run.stdout.toString() + run.stderr.toString();
+  if (args[0] === "install") checkApk(args.at(-1)!);
+  if (args[0] === "uninstall" || (args[0] === "shell" && args[1] === "pm" && args[2] === "clear")) {
+    if (args.at(-1) !== TEST_PACKAGE) throw new Error("Refusing to remove or clear a non-audit app");
+    requireEmulator();
+  }
+  if (args[0] === "shell" && /locksettings|fingerprint/.test(args[1] ?? "")) throw new Error("Test helpers must not change screen locks or enrolled fingerprints");
+  if (args[0] === "emu") requireEmulator();
+  if (args[0] === "shell" && args[1] === "settings" && ["put", "delete"].includes(args[2] ?? "") && args[3] === "secure") {
+    const key = args[4]!;
+    if (!savedSettings.has(key)) savedSettings.set(key, runAdb(["shell", "settings", "get", "secure", key]).trim());
+  }
+  if (args[0] === "forward" || args[0] === "reverse") {
+    const mode = args[0];
+    if (args[1] === "--remove-all") throw new Error("Removing unrelated port mappings is refused");
+    if (args[1] === "--remove") {
+      const key = `${mode} ${args[2]}`;
+      if (!savedForwards.has(key)) throw new Error("Refusing to remove a port mapping this test did not create");
+      restoreForward(mode, args[2]!, savedForwards.get(key));
+      return "";
+    }
+    if (!args[1]?.startsWith("--")) {
+      const key = `${mode} ${args[1]}`;
+      if (!savedForwards.has(key)) {
+        const existing = runAdb([mode, "--list"]).split(/\r?\n/).map(line => line.trim().split(/\s+/)).find(parts => parts[1] === args[1] && (mode === "reverse" || parts[0] === target.serial));
+        savedForwards.set(key, existing?.[2]);
+      }
+    }
+  }
+  return runAdb(args);
+}
+
+/** For assertions whose expected outcome is a failing command (e.g. release run-as). */
+export function adbExpectedFailure(...args: string[]): string {
+  if (args[0] !== "shell" || args[1] !== "run-as" || args[2] !== TEST_PACKAGE) throw new Error("Unexpected negative-test command");
+  return runAdb(args, true);
 }
 
 export const shell = (...args: string[]) => adb("shell", ...args).replace(/\r/g, "").trim();
@@ -103,6 +195,7 @@ export function type(text: string) {
 export const key = (code: string) => shell("input", "keyevent", code);
 
 export function screenshot(path: string) {
-  const run = Bun.spawnSync([ADB, "exec-out", "screencap", "-p"], { stdout: "pipe" });
+  const run = Bun.spawnSync([ADB, "-s", target.serial, "exec-out", "screencap", "-p"], { stdout: "pipe", stderr: "pipe" });
+  if (run.exitCode !== 0) throw new Error(`ADB screenshot failed: ${run.stderr.toString()}`);
   Bun.write(path, run.stdout);
 }

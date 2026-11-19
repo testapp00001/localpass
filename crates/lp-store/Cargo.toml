@@ -3,6 +3,7 @@ name = "lp-store"
 description = "LocalPass storage: SQLite op-log, metadata and peer address book"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

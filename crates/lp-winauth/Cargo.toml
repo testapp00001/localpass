@@ -3,6 +3,7 @@ name = "lp-winauth"
 description = "LocalPass Windows system passkey provider: the packaged COM server that relays WebAuthn plugin requests to the app"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [features]

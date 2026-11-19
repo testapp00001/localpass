@@ -75,7 +75,10 @@ impl TotpSpec {
     /// Accepts an `otpauth://totp/...` URI or a bare base32 secret.
     pub fn parse(input: &str) -> Result<Self> {
         let input = input.trim();
-        if input.len() > 10 && input[..10].eq_ignore_ascii_case("otpauth://") {
+        if input
+            .get(..10)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("otpauth://"))
+        {
             Self::parse_uri(&input[10..])
         } else {
             Self::from_secret(decode_base32(input)?, TotpAlgorithm::Sha1, 6, 30)

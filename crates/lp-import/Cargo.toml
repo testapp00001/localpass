@@ -3,6 +3,7 @@ name = "lp-import"
 description = "LocalPass import/export: Bitwarden JSON/CSV, KeePass KDBX, browser CSV"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

@@ -277,6 +277,22 @@ mod tests {
     use super::*;
     use crate::crypto::{NoiseKeypair, SigningKey};
 
+    #[test]
+    #[ignore = "M-1: pending phase 9.2 replacement membership; legacy records must remain migration provenance"]
+    fn audit_post_cutoff_revocation_must_not_remove_a_survivor() {
+        let v = VaultId::random().unwrap();
+        let (owner, lost, survivor) = (dev(&v), dev(&v), dev(&v));
+        let records = vec![
+            genesis(v, &owner),
+            add(&owner, 2, &lost),
+            add(&owner, 3, &survivor),
+            revoke(&owner, 4, &lost, 1),
+            revoke(&lost, 2, &survivor, 0),
+        ];
+        let view = RosterView::compute(v, id(&owner), &records).unwrap();
+        assert!(view.is_active(&id(&survivor)));
+    }
+
     struct Dev {
         sk: SigningKey,
         keys: DeviceKeys,

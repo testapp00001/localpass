@@ -6,6 +6,8 @@ LocalPass is a fully local password manager. The vault lives only on the user's 
 
 ## Current work
 
+**Phase 9 is the active approved work:** read `docs/handoff-phase9.md` and `docs/plans/2026-11-16-phase9-audit-remediation.md`. The initial batch is checkpointed for Windows continuation; finish 9.1 legacy containment and JS dependency triage there before 9.2. Replacement recovery and coordinated upgrades are still pending. Earlier phase notes below are historical context.
+
 Phases 0-4 (shared core, browser extension, passkeys, Android provider, Windows system passkey
 provider) are done. Phase 5 (hardening and release builds) is in progress: 5.1 (property tests),
 5.2 (fixes), 5.3 (security review, `docs/phase5-security-review.md`), 5.4 (README "Security notes and limits") and 5.5 (release builds: `target/dist/0.2.0`, version 0.2.0) are done, only 5.6 (final matrix and report) remains. **Start from `docs/handoff-phase4-5.md`, section

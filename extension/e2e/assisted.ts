@@ -1,7 +1,7 @@
 // ASSISTED Chrome check against the REAL desktop app (Linux; also BROWSER=chromium|brave|vivaldi|edge). A person has to be at
 // the screen.
 //
-//   terminal 1: cd app && LOCALPASS_PROFILE=dev2 bun run tauri dev     (any throwaway profile; its vault must be unlockable by
+//   terminal 1: cd app && LOCALPASS_PROFILE=audit bun run tauri dev     (any throwaway profile; its vault must be unlockable by
 //               you; the app uses your real keyring. Optionally LOCALPASS_RAISE=present|remap for the 8.4 raise variants.)
 //   terminal 2: cd extension && bun run build --e2e && [BROWSER=chromium] bun run e2e/assisted.ts [profile] [path to the localpass binary]
 //
@@ -122,7 +122,7 @@ export async function openControlTab(browser: Browser): Promise<Page> {
 }
 
 async function main() {
-  const profile = process.argv[2] ?? "dev2";
+  const profile = process.argv[2] ?? "audit";
   const appExe = resolve(process.argv[3] ?? join(import.meta.dir, "../../target/debug/localpass"));
   const version = Bun.spawnSync([browserExe, "--version"], { stdout: "pipe", stderr: "ignore", env: { ...process.env, HOME: "/nonexistent" } }).stdout.toString().trim();
   const name = `${browserKind}: ${version || browserExe}`;

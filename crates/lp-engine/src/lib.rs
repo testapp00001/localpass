@@ -233,6 +233,21 @@ impl Engine {
         self.inner.store.lock().expect("store")
     }
 
+    /// A panic can leave partially changed decrypted state behind. Never reuse
+    /// that state: even status reads must discard it so auto-lock can proceed.
+    fn session(&self) -> std::sync::MutexGuard<'_, Option<Unlocked>> {
+        match self.inner.session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                drop(guard.take());
+                self.inner.session.clear_poison();
+                self.emit(EngineEvent::Status(VaultStatus::Locked));
+                guard
+            }
+        }
+    }
+
     fn ctx(&self) -> Result<Arc<VaultCtx>> {
         self.inner
             .vault
@@ -257,7 +272,7 @@ impl Engine {
     pub fn status(&self) -> VaultStatus {
         if self.inner.vault.read().expect("vault").is_none() {
             VaultStatus::NoVault
-        } else if self.inner.session.lock().expect("session").is_some() {
+        } else if self.session().is_some() {
             VaultStatus::Unlocked
         } else {
             VaultStatus::Locked
@@ -365,7 +380,7 @@ impl Engine {
         });
         *self.inner.vault.write().expect("vault") = Some(ctx);
         let session = Unlocked::load(keys.vk, keys.sk, &replica, Hlc::default())?;
-        *self.inner.session.lock().expect("session") = Some(session);
+        *self.session() = Some(session);
         self.emit(EngineEvent::Status(VaultStatus::Unlocked));
         Ok(())
     }
@@ -440,7 +455,7 @@ impl Engine {
             .and_then(|b| cbor::from_slice(&b).ok())
             .unwrap_or_default();
         let session = Unlocked::load(keys.vk, keys.sk, &ctx.replica, last_hlc)?;
-        *self.inner.session.lock().expect("session") = Some(session);
+        *self.session() = Some(session);
         self.emit(EngineEvent::Status(VaultStatus::Unlocked));
         self.emit(EngineEvent::VaultChanged);
         Ok(())
@@ -448,7 +463,7 @@ impl Engine {
 
     /// Wipes decrypted data from memory. Sync keeps running.
     pub fn lock(&self) {
-        let was = self.inner.session.lock().expect("session").take();
+        let was = self.session().take();
         if was.is_some() {
             drop(was);
             self.emit(EngineEvent::Status(VaultStatus::Locked));
@@ -554,7 +569,7 @@ impl Engine {
 
     fn with_session<T>(&self, f: impl FnOnce(&mut Unlocked, &VaultCtx) -> Result<T>) -> Result<T> {
         let ctx = self.ctx()?;
-        let mut guard = self.inner.session.lock().expect("session");
+        let mut guard = self.session();
         let s = guard.as_mut().ok_or(EngineError::Locked)?;
         // Ops may have arrived through sync since we last looked.
         if s.seen_version != ctx.replica.version() {
@@ -574,13 +589,7 @@ impl Engine {
 
     /// Persists the clock, nudges sync and tells the UI.
     fn after_local_write(&self) {
-        let hlc = self
-            .inner
-            .session
-            .lock()
-            .expect("session")
-            .as_ref()
-            .map(|s| s.clock.last());
+        let hlc = self.session().as_ref().map(|s| s.clock.last());
         if let Some(h) = hlc
             && let Ok(bytes) = cbor::to_vec(&h)
         {
@@ -614,7 +623,7 @@ impl Engine {
     /// Applies ops that arrived through sync to the unlocked session.
     pub fn catch_up(&self) -> Result<bool> {
         let ctx = self.ctx()?;
-        let mut guard = self.inner.session.lock().expect("session");
+        let mut guard = self.session();
         match guard.as_mut() {
             Some(s) => s.catch_up(&ctx.replica),
             None => Ok(false),
@@ -966,10 +975,7 @@ impl Engine {
             })
             .unwrap_or_default();
         let names: BTreeMap<DeviceId, (String, String)> = self
-            .inner
-            .session
-            .lock()
-            .expect("session")
+            .session()
             .as_ref()
             .map(|s| {
                 s.state
@@ -1443,10 +1449,7 @@ impl Engine {
 
     pub fn sync_status(&self) -> SyncStatus {
         let names: BTreeMap<DeviceId, String> = self
-            .inner
-            .session
-            .lock()
-            .expect("session")
+            .session()
             .as_ref()
             .map(|s| {
                 s.state
@@ -1505,6 +1508,42 @@ fn check_password(password: &str) -> Result<()> {
 #[cfg(test)]
 mod legacy_items_tests {
     use super::*;
+
+    #[test]
+    fn locking_discards_a_poisoned_session_and_allows_unlocking_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = EngineConfig::new(dir.path(), "audit-test");
+        config.kdf = KdfParams::insecure_for_tests();
+        let engine = Engine::open(
+            config,
+            Arc::new(FileSecretStore::new(dir.path().join("device.key"))),
+        )
+        .unwrap();
+        engine
+            .create_vault("audit master password", "Audit")
+            .unwrap();
+        for check_status_first in [false, true] {
+            let poisoned = engine.clone();
+            assert!(
+                std::thread::spawn(move || {
+                    let _guard = poisoned.inner.session.lock().unwrap();
+                    panic!("simulate a panicking request while holding the session");
+                })
+                .join()
+                .is_err()
+            );
+            assert!(engine.inner.session.is_poisoned());
+            if check_status_first {
+                assert_eq!(engine.status(), VaultStatus::Locked);
+            }
+            engine.lock();
+            assert!(!engine.inner.session.is_poisoned());
+            assert!(engine.inner.session.lock().unwrap().is_none());
+            assert_eq!(engine.status(), VaultStatus::Locked);
+            engine.unlock("audit master password").unwrap();
+            assert_eq!(engine.status(), VaultStatus::Unlocked);
+        }
+    }
 
     #[test]
     fn removed_file_records_stay_private_and_are_not_destroyed() {

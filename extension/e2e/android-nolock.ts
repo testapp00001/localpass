@@ -1,6 +1,7 @@
-// Passkeys are refused on a phone without a screen lock, with a clear message, and Settings says why.
+import { requireEmulator } from "./adb";
+// Passkeys are refused on an emulator without a screen lock, with a clear message, and Settings says why.
 //
-//   (start AVD lp_api37 and REMOVE its screen lock first: `adb shell locksettings clear --old 1234`.
+//   (start AVD lp_api37 and REMOVE its screen lock first: `adb -s <emulator-serial> shell locksettings clear --old 1234`.
 //    That also removes the enrolled fingerprint; to put it back set the PIN again and enrol the
 //    fingerprint in Settings, or restore a copy of the AVD's data files. This script only checks.)
 //   cd extension && bun run e2e/android-nolock.ts [path\to\app-x86_64-debug.apk]   (LP_SKIP_INSTALL=1 reuses the installed build)
@@ -13,6 +14,8 @@ import puppeteer, { type Browser } from "puppeteer-core";
 import { adb, find, labels, shell, sleep, tap, tapNode, waitFor } from "./adb";
 import { MASTER_PASSWORD, PACKAGE, PROVIDER, connectToApp } from "./android";
 import { startRelyingParty } from "./rp";
+
+requireEmulator();
 
 const CHROME = "com.android.chrome";
 const APK = resolve(import.meta.dir, "../../app/src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk");
@@ -40,7 +43,7 @@ try {
   shell("am", "force-stop", CHROME);
   shell("am", "force-stop", "com.android.credentialmanager");
   shell("input", "keyevent", "KEYCODE_HOME");
-  shell("am", "start", "-W", "-n", `${PACKAGE}/.MainActivity`);
+  shell("am", "start", "-W", "-n", `${PACKAGE}/app.localpass.MainActivity`);
   await sleep(8000);
   const wait = find(/^Wait$/);
   if (wait) tapNode(wait);
@@ -48,7 +51,7 @@ try {
   await app.invoke("app_info");
   await sleep(5000);
   const inApp = async <T>(call: () => Promise<T>): Promise<T> => {
-    shell("am", "start", "-n", `${PACKAGE}/.MainActivity`);
+    shell("am", "start", "-n", `${PACKAGE}/app.localpass.MainActivity`);
     await sleep(700);
     return call();
   };

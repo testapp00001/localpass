@@ -3,6 +3,7 @@ name = "localpass"
 version.workspace = true
 description = "LocalPass: a fully local password manager with LAN sync"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lib]

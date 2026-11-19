@@ -7,7 +7,7 @@ version = "0.3.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/testapp00001/localpass"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [workspace.dependencies]
 # Serialization
@@ -36,7 +36,7 @@ snow = "0.10"
 spake2 = "0.4"
 
 # Storage
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Async & networking
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util"] }

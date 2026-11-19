@@ -1,3 +1,4 @@
+import { TEST_PACKAGE } from "./adb";
 // Passkeys on a real Android system image: Chrome -> Credential Manager -> the LocalPass
 // provider, with a local relying party (SimpleWebAuthn) checking the result.
 //
@@ -15,8 +16,8 @@ import puppeteer, { type Browser, type Page } from "puppeteer-core";
 import { adb, find, key, labels, screen, scrollTo, shell, sleep, tap, tapNode, type, waitFor } from "./adb";
 import { startRelyingParty } from "./rp";
 
-export const PACKAGE = "app.localpass";
-export const PROVIDER = `${PACKAGE}/${PACKAGE}.LpCredentialProviderService`;
+export const PACKAGE = TEST_PACKAGE;
+export const PROVIDER = `${PACKAGE}/app.localpass.LpCredentialProviderService`;
 export const MASTER_PASSWORD = "end to end master password";
 const CHROME = "com.android.chrome";
 const APK = resolve(import.meta.dir, "../../app/src-tauri/gen/android/app/build/outputs/apk/x86_64/debug/app-x86_64-debug.apk");
@@ -98,7 +99,7 @@ if (import.meta.main) {
     shell("input", "keyevent", "KEYCODE_HOME");
     // The first start after an install is slow on an emulator (no compiled code yet); let it finish
     // and close an "isn't responding" box if the system raised one meanwhile.
-    shell("am", "start", "-W", "-n", `${PACKAGE}/.MainActivity`);
+    shell("am", "start", "-W", "-n", `${PACKAGE}/app.localpass.MainActivity`);
     await sleep(8000);
     const wait = find(/^Wait$/);
     if (wait) tapNode(wait);
@@ -108,7 +109,7 @@ if (import.meta.main) {
     // Android freezes a background app, which would stall its web view: bring it to the front for
     // every call into it.
     const inApp = async <T>(call: () => Promise<T>): Promise<T> => {
-      shell("am", "start", "-n", `${PACKAGE}/.MainActivity`);
+      shell("am", "start", "-n", `${PACKAGE}/app.localpass.MainActivity`);
       await sleep(700);
       return call();
     };
@@ -282,7 +283,7 @@ if (import.meta.main) {
 
     // ---- 7. autofill: a saved login for the website in Chrome ----
     adb("reverse", `tcp:${loginPort}`, `tcp:${loginPort}`);
-    shell("settings", "put", "secure", "autofill_service", `${PACKAGE}/${PACKAGE}.LpAutofillService`);
+    shell("settings", "put", "secure", "autofill_service", `${PACKAGE}/app.localpass.LpAutofillService`);
     // Chrome only hands pages to a third-party autofill service when its own setting says so (it
     // asks to restart; choosing the already-selected option does nothing).
     shell("am", "force-stop", CHROME);

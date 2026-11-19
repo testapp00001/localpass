@@ -12,7 +12,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import puppeteer, { type Browser, type Page, type Target } from "puppeteer-core";
+import { testProfile } from "./test-profile";
+import puppeteer, { type Browser, type ElementHandle, type Page, type Target } from "puppeteer-core";
 
 const root = resolve(import.meta.dir, "../..");
 export const extensionDir = resolve(import.meta.dir, "../dist-e2e");
@@ -82,7 +83,7 @@ export class BrowserSetup {
    * app's socket is there) and display; HOME, the XDG folders and the user data dir stay throwaway.
    */
   constructor(private readonly assisted?: { appExe: string; profile: string }) {
-    this.profile = assisted?.profile ?? `e2e${process.pid}`;
+    this.profile = testProfile(assisted?.profile ?? `e2e${process.pid}`);
     if (!windows) {
       mkdirSync(this.runtime, { mode: 0o700 });
       mkdirSync(this.home);
@@ -238,7 +239,7 @@ export async function panelClick(panel: Page, label: string, timeoutMs = 8000): 
     { timeout: timeoutMs },
     label,
   );
-  await handle.asElement()!.click();
+  await (handle.asElement() as ElementHandle<HTMLButtonElement>).click();
 }
 
 /** Whether the panel page has closed. */

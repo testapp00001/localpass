@@ -3,6 +3,7 @@ name = "lp-broker"
 description = "LocalPass broker: lets browser extensions and OS passkey providers ask the unlocked app for logins and passkeys"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [features]

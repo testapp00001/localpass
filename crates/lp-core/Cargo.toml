@@ -3,6 +3,7 @@ name = "lp-core"
 description = "LocalPass core: crypto, signed op-log format, CRDT materializer, roster"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [features]

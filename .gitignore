@@ -35,3 +35,10 @@ Thumbs.db
 dist-firefox/
 dist-e2e/
 dist-firefox-e2e/
+
+# Isolated phase 9 verification artifacts
+/audit/target-phase9/
+/scripts/__pycache__/
+
+# Offline Windows transfer packet (generated from committed source)
+/audit/transfer/

@@ -28,6 +28,7 @@ android {
     namespace = "app.localpass"
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
+        manifestPlaceholders["localpassLabel"] = "LocalPass"
         applicationId = "app.localpass"
         minSdk = 24
         targetSdk = 37
@@ -42,6 +43,13 @@ android {
                 storeFile = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["password"] as String
             }
+        }
+    }
+    val auditBuild = providers.gradleProperty("localpass.audit").orNull == "true"
+    if (auditBuild) {
+        defaultConfig {
+            applicationId = "app.localpass.audit"
+            manifestPlaceholders["localpassLabel"] = "LocalPass Audit"
         }
     }
     buildTypes {

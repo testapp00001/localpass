@@ -641,8 +641,16 @@ proptest! {
             prop_assert_eq!(result.unwrap(), w.w2.id(), "{:?}", picks);
         }
 
-        // Keys already in the roster do not need the proof at all.
-        prop_assert_eq!(r.verify_peer(&w.p.noise.public(), &proof).unwrap(), w.p.id());
+        // Known keys may omit a proof, but any proof supplied still has to be
+        // bounded and valid. A cached identity must not bypass validation.
+        let known = r.verify_peer(&w.p.noise.public(), &proof);
+        if proof.len() > MAX_PROOF_OPS {
+            prop_assert!(matches!(known, Err(SyncError::Protocol(_))));
+        } else if bad {
+            prop_assert!(matches!(known, Err(SyncError::NotMember)));
+        } else {
+            prop_assert_eq!(known.unwrap(), w.p.id());
+        }
         prop_assert_eq!(r.verify_peer(&w.w1.noise.public(), &[]).unwrap(), w.w1.id());
     }
 }

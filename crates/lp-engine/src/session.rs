@@ -53,15 +53,11 @@ impl Unlocked {
         self.applied.clear();
         self.flagged.clear();
         self.undecryptable = 0;
-        self.seen_version = replica.version();
-        self.roster_len = replica.roster_len();
-        let view = replica.view();
-        let store = replica.store();
-        let mut ops = Vec::new();
-        store.for_each_op(|op| ops.push(op))?;
-        drop(store);
-        for op in &ops {
-            self.apply(&view, op);
+        let snapshot = replica.snapshot_since(&VersionVector::new())?;
+        self.seen_version = snapshot.version;
+        self.roster_len = snapshot.roster_len;
+        for op in &snapshot.ops {
+            self.apply(&snapshot.view, op);
         }
         self.clock.observe(self.state.max_hlc(), now_ms());
         Ok(())
@@ -69,27 +65,17 @@ impl Unlocked {
 
     /// Folds in ops that arrived since the last call. Returns whether anything changed.
     pub fn catch_up(&mut self, replica: &Replica) -> Result<bool> {
-        let version = replica.version();
-        if replica.roster_len() != self.roster_len {
+        let snapshot = replica.snapshot_since(&self.applied)?;
+        if snapshot.roster_len != self.roster_len {
             // Membership changed: which authors count may differ, so start over.
             self.rebuild(replica)?;
             return Ok(true);
         }
-        let view = replica.view();
-        let store = replica.store();
-        let mut fresh = Vec::new();
-        for (author, max) in store.version_vector()? {
-            let have = self.applied.get(&author).copied().unwrap_or(0);
-            if max > have {
-                fresh.extend(store.ops_after(&author, have, (max - have) as usize)?);
-            }
+        for op in &snapshot.ops {
+            self.apply(&snapshot.view, op);
         }
-        drop(store);
-        for op in &fresh {
-            self.apply(&view, op);
-        }
-        self.seen_version = version;
-        Ok(!fresh.is_empty())
+        self.seen_version = snapshot.version;
+        Ok(!snapshot.ops.is_empty())
     }
 
     fn apply(&mut self, view: &RosterView, op: &SignedOp) {

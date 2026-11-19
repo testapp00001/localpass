@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writ
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { testProfile } from "../test-profile";
 
 const root = resolve(import.meta.dir, "../../..");
 export const extensionDir = resolve(import.meta.dir, "../../dist-firefox-e2e");
@@ -86,7 +87,7 @@ export class FirefoxHarness {
    * keeps the real runtime folder and display, and finds the app's own executable as the native-messaging helper.
    */
   constructor(private readonly assisted?: { appExe: string; profile: string }) {
-    this.profile = assisted?.profile ?? `e2e${process.pid}`;
+    this.profile = testProfile(assisted?.profile ?? `e2e${process.pid}`);
   }
   /** Events from BiDi, newest last (browsingContext.contextCreated / contextDestroyed). */
   readonly events: { method: string; params: any }[] = [];

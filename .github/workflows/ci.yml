@@ -17,6 +17,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  advisories:
+    name: Dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo install cargo-audit --locked
+      - run: python3 -m unittest discover -s scripts -p test_advisories.py
+      - run: python3 scripts/check-advisories.py
+
   rust:
     name: Rust (fmt, clippy, tests)
     runs-on: windows-latest
